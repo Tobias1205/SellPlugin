@@ -147,14 +147,6 @@ potions:
     oozing: 15
     infested: 15
 
-# Extra bonus per rank, wordt BIJ de categorie-multiplier opgeteld.
-# Permissie = sell.multiplier.<naam>, bij meerdere ranks telt de hoogste.
-multipliers:
-  vip: 0.25
-  vipplus: 0.5
-  mvp: 0.75
-  elite: 1.0
-
 # Globale multiplier voor iedereen (bv. 2.0 voor een dubbel-geld event).
 # Aanpasbaar in game met /sell global <x>
 global-multiplier: 1.0
@@ -174,6 +166,13 @@ gui:
   max-line: "<!italic><gold>Maximaal level bereikt!"
   progress-line: "<!italic>{bar} <white>{percent}%"
   click-line: "<!italic><yellow>Klik voor het overzicht"
+  items-click-line: "<!italic><yellow>Klik om alle items te zien"
+  items-title: "<dark_gray>{category} <gray>- items ({page}/{pages})"
+  worth-level: "<!italic><gray>Waarde: <green>${price}</green> <dark_gray>(per level)"
+  potion-note: "<!italic><dark_gray>Verlengd, versterkt en splash zijn meer waard"
+  prev: "<!italic><yellow>Vorige pagina"
+  next: "<!italic><yellow>Volgende pagina"
+  back-overview: "<!italic><yellow>Terug naar overzicht"
   level-reached: "<!italic><green>x{multiplier} behaald"
   level-locked: "<!italic><gray>x{multiplier}"
   level-from: "<!italic><gray>Vanaf <white>${needed}</white> verkocht"
@@ -185,7 +184,7 @@ messages:
   category-levelup: "<gold><bold>LEVEL UP!</bold> <white>{category}</white> <yellow>multiplier is nu x{progress}</yellow>"
   no-permission: "<red>Geen permissie."
   reloaded: "<green>Config en prijzen herladen."
-  multiplier-header: "<green>Jouw multipliers <gray>(rank +{bonus}, global x{global})"
+  multipliers-header: "<green>Jouw multipliers <gray>(global x{global})"
   multiplier-line: "<gray>- {category}<gray>: <yellow>x{multiplier} <dark_gray>(level x{progress})"
   worth: "<yellow>{item}</yellow> <gray>- <green>${price}</green> per stuk <gray>(x{multiplier}), stack: ${stack}"
   not-sellable: "<red>Dit item kan niet verkocht worden."
