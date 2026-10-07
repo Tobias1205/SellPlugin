@@ -1,0 +1,59 @@
+title: "<dark_gray>Sell"
+rows: 6
+
+# Alle prijzen in prices.yml worden hiermee vermenigvuldigd (1.0 = ongewijzigd).
+# Wil je alles 10x zo duur/waardevol? Zet dit op 10.
+price-scale: 1.0
+
+# Prijs voor items die nog niet in prices.yml staan (worden automatisch toegevoegd)
+fallback-price: 1.0
+
+# ---- Multiplier systeem ----
+# Spelers stijgen automatisch in level naarmate ze meer verkopen.
+# Gerekend wordt met het totaal verkochte bedrag (zonder multiplier).
+# Formaat: "totaal verkocht": multiplier
+max-multiplier: 3.0
+levels:
+  "0": 1.0
+  "5000": 1.1
+  "25000": 1.25
+  "100000": 1.5
+  "250000": 1.75
+  "500000": 2.0
+  "1000000": 2.25
+  "2500000": 2.5
+  "5000000": 2.75
+  "10000000": 3.0
+
+# Extra bonus per rank, wordt BIJ het level opgeteld.
+# Permissie = sell.multiplier.<naam>, bij meerdere ranks telt de hoogste.
+# Voorbeeld: vip = +0.25, dus level x2.0 wordt x2.25
+multipliers:
+  vip: 0.25
+  vipplus: 0.5
+  mvp: 0.75
+  elite: 1.0
+
+# Globale multiplier voor iedereen (bv. 2.0 voor een dubbel-geld event).
+# Aanpasbaar in game met /sell global <x>
+global-multiplier: 1.0
+
+# Toont de waarde in de tooltip van items in je inventory (heeft PacketEvents nodig)
+worth-lore:
+  enabled: true
+  each: "<!italic><gray>Waarde: <green>${price}</green> <dark_gray>(per stuk)"
+  stack: "<!italic><gray>Stack: <green>${stack}"
+
+messages:
+  sold: "<green>Je hebt <white>{items}</white> items verkocht voor <yellow>${money}</yellow> <gray>(x{multiplier})"
+  levelup: "<gold><bold>LEVEL UP!</bold> <yellow>Je sell multiplier is nu x{progress}</yellow>"
+  no-permission: "<red>Geen permissie."
+  reloaded: "<green>Config en prijzen herladen."
+  multiplier: "<green>Jouw multiplier: <yellow>x{multiplier}</yellow> <gray>(level x{progress}, rank +{bonus}, global x{global})"
+  progress: "<gray>Totaal verkocht: <white>${sold}</white> <dark_gray>| <gray>Volgend level <yellow>x{next}</yellow> bij <white>${needed}</white>"
+  progress-max: "<gold>Je hebt het maximale level bereikt!"
+  worth: "<yellow>{item}</yellow> <gray>- <green>${price}</green> per stuk <gray>(x{multiplier}), stack: ${stack}"
+  not-sellable: "<red>Dit item kan niet verkocht worden."
+  hold-item: "<red>Hou een item vast."
+  global-set: "<green>Global multiplier staat nu op x{multiplier}."
+  usage-global: "<red>Gebruik: /sell global <getal>"

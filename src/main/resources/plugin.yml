@@ -1,0 +1,17 @@
+name: SellPlugin
+version: 1.2.0
+main: nl.sell.SellPlugin
+api-version: '1.21'
+depend: [Vault]
+softdepend: [packetevents]
+commands:
+  sell:
+    description: Open het verkoopmenu
+    usage: /sell [worth|multiplier|reload|global <x>]
+permissions:
+  sell.use:
+    description: Gebruik /sell
+    default: true
+  sell.admin:
+    description: Reload en global multiplier
+    default: op
