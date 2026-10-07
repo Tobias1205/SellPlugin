@@ -13,6 +13,8 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.enchantments.Enchantment;
+import org.bukkit.potion.PotionType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -51,6 +53,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
@@ -78,6 +81,11 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     private volatile Map<Material, Integer> categoryOf = new EnumMap<>(Material.class);
     private volatile int defaultCategory = 0;
     private volatile List<Category> categories = new ArrayList<>();
+    private volatile Map<String, Double> enchantPrices = new ConcurrentHashMap<>();
+    private volatile Map<String, Double> potionPrices = new ConcurrentHashMap<>();
+    private final AtomicLong loreApplied = new AtomicLong();
+    private final Set<UUID> resyncPending = ConcurrentHashMap.newKeySet();
+    private volatile String lastLoreError = "geen";
 
     private final Map<UUID, double[]> soldTotals = new ConcurrentHashMap<>();      // per categorie
     private final Map<UUID, double[]> multiplierCache = new ConcurrentHashMap<>(); // per categorie
@@ -299,8 +307,20 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         }
         priceScale = Math.max(0, getConfig().getDouble("price-scale", 1.0));
         prices = map;
+        loadSpecialPrices();
         getLogger().info(map.size() + " prijzen geladen (" + added
                 + " automatisch toegevoegd met fallback-prijs, " + removed + " onbekende verwijderd).");
+    }
+
+    private void loadSpecialPrices() {
+        Map<String, Double> e = new ConcurrentHashMap<>();
+        ConfigurationSection es = getConfig().getConfigurationSection("enchanted-books.prices");
+        if (es != null) for (String k : es.getKeys(false)) e.put(k.toLowerCase(Locale.ROOT), es.getDouble(k));
+        enchantPrices = e;
+        Map<String, Double> p = new ConcurrentHashMap<>();
+        ConfigurationSection ps = getConfig().getConfigurationSection("potions.prices");
+        if (ps != null) for (String k : ps.getKeys(false)) p.put(k.toLowerCase(Locale.ROOT), ps.getDouble(k));
+        potionPrices = p;
     }
 
     // ------------------------------------------------------------------ multiplier
@@ -392,6 +412,11 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     /** Prijs per stuk (zonder multiplier), of -1 als het item niet verkocht kan worden. */
     private double unitPrice(ItemStack item, boolean full) {
+        Material type = item.getType();
+        if (type == Material.ENCHANTED_BOOK) return enchantedBookPrice(item);
+        if (type == Material.POTION || type == Material.SPLASH_POTION || type == Material.LINGERING_POTION) {
+            return potionPrice(item);
+        }
         Double base = prices.get(item.getType());
         if (base == null || base <= 0) return -1;
 
@@ -414,7 +439,61 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         return base * priceScale * factor;
     }
 
+    private double enchantedBookPrice(ItemStack item) {
+        if (!(item.getItemMeta() instanceof EnchantmentStorageMeta esm)) return -1;
+        if (esm.hasDisplayName() || esm.hasLore()) return -1;
+        Map<Enchantment, Integer> stored = esm.getStoredEnchants();
+        if (stored.isEmpty()) return -1;
+        double def = getConfig().getDouble("enchanted-books.default-per-level", 50);
+        double total = 0;
+        for (Map.Entry<Enchantment, Integer> e : stored.entrySet()) {
+            String key = e.getKey().getKey().getKey().toLowerCase(Locale.ROOT);
+            total += enchantPrices.getOrDefault(key, def) * e.getValue();
+        }
+        return total * priceScale;
+    }
+
+    private double potionPrice(ItemStack item) {
+        if (!(item.getItemMeta() instanceof PotionMeta pm)) return -1;
+        if (pm.hasDisplayName() || pm.hasLore() || pm.hasCustomEffects()) return -1;
+        PotionType pt = pm.getBasePotionType();
+        if (pt == null) return -1;
+        String key = pt.getKey().getKey().toLowerCase(Locale.ROOT);
+        double mult = 1.0;
+        if (key.startsWith("long_")) {
+            key = key.substring(5);
+            mult = getConfig().getDouble("potions.long-multiplier", 1.5);
+        } else if (key.startsWith("strong_")) {
+            key = key.substring(7);
+            mult = getConfig().getDouble("potions.strong-multiplier", 1.7);
+        }
+        double base = potionPrices.getOrDefault(key, getConfig().getDouble("potions.default-price", 10));
+        if (item.getType() == Material.SPLASH_POTION) mult *= getConfig().getDouble("potions.splash-multiplier", 1.25);
+        if (item.getType() == Material.LINGERING_POTION) mult *= getConfig().getDouble("potions.lingering-multiplier", 2.5);
+        return base * mult * priceScale;
+    }
+
     // ---- gebruikt door WorthLore (netwerk-thread, dus alleen thread-safe dingen) ----
+
+    void onLoreApplied() { loreApplied.incrementAndGet(); }
+
+    void onLoreError(Throwable t) {
+        String msg = t.getClass().getSimpleName() + ": " + t.getMessage();
+        if (!msg.equals(lastLoreError)) {
+            lastLoreError = msg;
+            getLogger().warning("Fout in worth-tooltip: " + t);
+        }
+    }
+
+    /** Stuurt het hele inventory opnieuw (met tooltips) nadat de server een los slot heeft bijgewerkt. */
+    void resyncInventory(UUID id) {
+        if (!shouldShowLore(id) || !resyncPending.add(id)) return;
+        Bukkit.getScheduler().runTaskLater(this, () -> {
+            resyncPending.remove(id);
+            Player p = Bukkit.getPlayer(id);
+            if (p != null && p.isOnline() && shouldShowLore(id)) p.updateInventory();
+        }, 2L);
+    }
 
     boolean shouldShowLore(UUID id) {
         return multiplierCache.containsKey(id) && !creative.contains(id);
@@ -455,8 +534,16 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         lore.add(line("gui.multiplier-line", "{multiplier}", fmt(total)));
         lore.add(line("gui.sold-line", "{sold}", fmt(sold)));
         double[] next = nextLevel(cat, sold);
-        if (next == null) lore.add(line("gui.max-line"));
-        else lore.add(line("gui.next-line", "{next}", fmt(next[1]), "{needed}", fmt(next[0])));
+        if (next == null) {
+            lore.add(line("gui.max-line"));
+        } else {
+            double cur = 0;
+            for (double[] l : c.levels()) if (sold >= l[0]) cur = l[0];
+            double frac = next[0] > cur ? (sold - cur) / (next[0] - cur) : 0;
+            lore.add(line("gui.next-line", "{next}", fmt(next[1]), "{needed}", fmt(next[0])));
+            lore.add(line("gui.progress-line", "{bar}", bar(frac),
+                    "{percent}", String.valueOf((int) Math.floor(Math.max(0, Math.min(1, frac)) * 100))));
+        }
         if (clickLine) {
             lore.add(Component.empty());
             lore.add(line("gui.click-line"));
@@ -468,6 +555,12 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             m.lore(lore);
         });
         return it;
+    }
+
+    private static String bar(double frac) {
+        int total = 20;
+        int filled = (int) Math.round(Math.max(0, Math.min(1, frac)) * total);
+        return "<green>" + "|".repeat(filled) + "</green><dark_gray>" + "|".repeat(total - filled) + "</dark_gray>";
     }
 
     private void openSell(Player p, ItemStack[] items) {
@@ -625,6 +718,20 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             sender.sendMessage(msg("reloaded"));
             return true;
         }
+        if (sub.equals("status")) {
+            if (!sender.hasPermission("sell.admin")) { sender.sendMessage(msg("no-permission")); return true; }
+            boolean pe = getServer().getPluginManager().isPluginEnabled("packetevents");
+            sender.sendMessage(MM.deserialize("<yellow>SellPlugin status"));
+            sender.sendMessage(MM.deserialize("<gray>PacketEvents gevonden: " + (pe ? "<green>ja" : "<red>nee (installeer PacketEvents)")));
+            sender.sendMessage(MM.deserialize("<gray>Worth-tooltip actief: " + (worthLore != null ? "<green>ja" : "<red>nee")));
+            sender.sendMessage(MM.deserialize("<gray>Items met tooltip verstuurd: <white>" + loreApplied.get()));
+            sender.sendMessage(MM.deserialize("<gray>Laatste fout: <white>" + lastLoreError));
+            if (sender instanceof Player pl) {
+                sender.sendMessage(MM.deserialize("<gray>Jij in creative (geen tooltip): "
+                        + (creative.contains(pl.getUniqueId()) ? "<red>ja, ga in survival" : "<green>nee")));
+            }
+            return true;
+        }
         if (sub.equals("global")) {
             if (!sender.hasPermission("sell.admin")) { sender.sendMessage(msg("no-permission")); return true; }
             try {
@@ -679,7 +786,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
         if (args.length != 1) return List.of();
         List<String> out = new ArrayList<>(List.of("worth", "multiplier"));
-        if (sender.hasPermission("sell.admin")) out.addAll(List.of("reload", "global"));
+        if (sender.hasPermission("sell.admin")) out.addAll(List.of("reload", "global", "status"));
         out.removeIf(s -> !s.startsWith(args[0].toLowerCase(Locale.ROOT)));
         return out;
     }

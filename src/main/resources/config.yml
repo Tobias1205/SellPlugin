@@ -26,44 +26,126 @@ category-levels:
 
 # De 9 categorieen (onderste rij van /sell). Waar elk item bij hoort staat in categories.yml.
 # scale: 0.5 = drempels de helft lager (handig voor goedkope categorieen), 2 = dubbel zo hoog.
-default-category: decor
+default-category: blocks
 categories:
-  natural:
-    name: "<green>Natuur"
-    icon: GRASS_BLOCK
-    scale: 0.4
-  wood:
-    name: "<gold>Hout"
-    icon: OAK_LOG
-    scale: 0.4
-  blocks:
-    name: "<gray>Bouwblokken"
-    icon: BRICKS
-    scale: 0.5
-  ores:
-    name: "<aqua>Ertsen"
-    icon: DIAMOND
-    scale: 2.0
-  farming:
-    name: "<yellow>Landbouw & Eten"
+  crops:
+    name: "<yellow>Crops"
     icon: WHEAT
     scale: 0.5
+  ores:
+    name: "<aqua>Ores"
+    icon: DIAMOND
+    scale: 2.0
   mobs:
     name: "<red>Mob Drops"
     icon: BONE
     scale: 0.5
+  natural:
+    name: "<green>Natural Items"
+    icon: GRASS_BLOCK
+    scale: 0.4
   tools:
-    name: "<blue>Gereedschap & Armor"
-    icon: BOW
+    name: "<blue>Armor & Tools"
+    icon: SHIELD
     scale: 1.5
-  redstone:
-    name: "<dark_red>Redstone & Transport"
-    icon: REDSTONE
+  fish:
+    name: "<dark_aqua>Fish"
+    icon: COD
+    scale: 0.5
+  books:
+    name: "<light_purple>Enchanted Books"
+    icon: ENCHANTED_BOOK
+    scale: 2.0
+  potions:
+    name: "<dark_purple>Potions"
+    icon: BREWING_STAND
     scale: 1.0
-  decor:
-    name: "<light_purple>Kleur & Decoratie"
-    icon: PAINTING
-    scale: 1.0
+  blocks:
+    name: "<gray>Blocks"
+    icon: BRICKS
+    scale: 0.5
+
+# ---- Enchanted books ----
+# Prijs = (prijs per level van elke enchantment) x (level), bij elkaar opgeteld.
+enchanted-books:
+  default-per-level: 50
+  prices:
+    protection: 60
+    fire_protection: 40
+    feather_falling: 50
+    blast_protection: 40
+    projectile_protection: 40
+    respiration: 50
+    aqua_affinity: 80
+    thorns: 60
+    depth_strider: 70
+    frost_walker: 120
+    soul_speed: 120
+    swift_sneak: 150
+    binding_curse: 5
+    sharpness: 70
+    smite: 40
+    bane_of_arthropods: 40
+    knockback: 40
+    fire_aspect: 80
+    looting: 100
+    sweeping_edge: 60
+    efficiency: 70
+    silk_touch: 400
+    unbreaking: 90
+    fortune: 150
+    power: 70
+    punch: 40
+    flame: 100
+    infinity: 400
+    luck_of_the_sea: 80
+    lure: 60
+    loyalty: 70
+    impaling: 70
+    riptide: 100
+    channeling: 150
+    multishot: 150
+    piercing: 50
+    quick_charge: 70
+    mending: 1500
+    vanishing_curse: 5
+    density: 80
+    breach: 80
+    wind_burst: 100
+
+# ---- Potions ----
+# Prijs van de basis-potion. "long_" (verlengd) en "strong_" (II) krijgen een extra factor.
+potions:
+  default-price: 10
+  long-multiplier: 1.5
+  strong-multiplier: 1.7
+  splash-multiplier: 1.25
+  lingering-multiplier: 2.5
+  prices:
+    water: 0.5
+    mundane: 2
+    thick: 2
+    awkward: 3
+    night_vision: 12
+    invisibility: 15
+    leaping: 10
+    fire_resistance: 15
+    swiftness: 12
+    slowness: 10
+    water_breathing: 12
+    healing: 15
+    harming: 12
+    poison: 12
+    regeneration: 20
+    strength: 20
+    weakness: 8
+    luck: 30
+    turtle_master: 40
+    slow_falling: 20
+    wind_charged: 15
+    weaving: 15
+    oozing: 15
+    infested: 15
 
 # Extra bonus per rank, wordt BIJ de categorie-multiplier opgeteld.
 # Permissie = sell.multiplier.<naam>, bij meerdere ranks telt de hoogste.
@@ -90,6 +172,7 @@ gui:
   sold-line: "<!italic><gray>Verkocht: <white>${sold}"
   next-line: "<!italic><gray>Volgend level: <yellow>x{next}</yellow> bij <white>${needed}"
   max-line: "<!italic><gold>Maximaal level bereikt!"
+  progress-line: "<!italic>{bar} <white>{percent}%"
   click-line: "<!italic><yellow>Klik voor het overzicht"
   level-reached: "<!italic><green>x{multiplier} behaald"
   level-locked: "<!italic><gray>x{multiplier}"

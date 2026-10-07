@@ -42,13 +42,32 @@ public class WorthLore extends PacketListenerAbstract {
 
     @Override
     public void onPacketSend(PacketSendEvent event) {
+        try {
+            handle(event);
+        } catch (Throwable t) {
+            plugin.onLoreError(t);
+        }
+    }
+
+    private void handle(PacketSendEvent event) {
         PacketTypeCommon type = event.getPacketType();
-        if (type != PacketType.Play.Server.SET_SLOT && type != PacketType.Play.Server.WINDOW_ITEMS) return;
+        boolean setSlot = type == PacketType.Play.Server.SET_SLOT;
+        boolean window = type == PacketType.Play.Server.WINDOW_ITEMS;
+
+        if (!setSlot && !window) {
+            // Nieuwe servers sturen losse inventory-wijzigingen (bv. oppakken) via een eigen packet.
+            // Die laten we ongemoeid, maar we sturen daarna het hele inventory opnieuw (met tooltip).
+            if (String.valueOf(type).equals("SET_PLAYER_INVENTORY")) {
+                UUID u = event.getUser().getUUID();
+                if (u != null) plugin.resyncInventory(u);
+            }
+            return;
+        }
 
         UUID uuid = event.getUser().getUUID();
         if (uuid == null || !plugin.shouldShowLore(uuid)) return;
 
-        if (type == PacketType.Play.Server.SET_SLOT) {
+        if (setSlot) {
             WrapperPlayServerSetSlot w = new WrapperPlayServerSetSlot(event);
             if (w.getWindowId() < 0) return; // cursor / speciale vensters
             var modified = addLore(w.getItem(), uuid);
@@ -86,6 +105,7 @@ public class WorthLore extends PacketListenerAbstract {
         lore.add(plugin.loreLine("each", unit, unit * item.getAmount()));
         if (item.getAmount() > 1) lore.add(plugin.loreLine("stack", unit, unit * item.getAmount()));
         item.lore(lore);
+        plugin.onLoreApplied();
         return SpigotConversionUtil.fromBukkitItemStack(item);
     }
 }
