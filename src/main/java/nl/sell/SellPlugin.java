@@ -16,7 +16,10 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -39,6 +42,7 @@ import org.jetbrains.annotations.NotNull;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
@@ -52,6 +56,11 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
+    /** Slots 0-44 zijn voor items, de onderste rij (45-53) voor de categorie-iconen. */
+    private static final int ITEM_SLOTS = 45;
+    private static final int BACK_SLOT = 0;
+    private static final int[] PATH = buildPath();
+
     /** Items die nooit verkocht kunnen worden (niet verkrijgbaar of met data). */
     private static final Set<String> BLOCKED = Set.of(
             "AIR", "CAVE_AIR", "VOID_AIR", "BEDROCK", "BARRIER", "LIGHT", "STRUCTURE_VOID",
@@ -61,16 +70,22 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             "LINGERING_POTION", "TIPPED_ARROW", "ENCHANTED_BOOK", "FILLED_MAP", "WRITTEN_BOOK",
             "PETRIFIED_OAK_SLAB", "TEST_BLOCK", "TEST_INSTANCE_BLOCK", "FARMLAND");
 
-    // prijzen worden ook vanuit de netwerk-thread gelezen, dus volatile + nooit aanpassen na het bouwen
+    private record Category(String id, String name, Material icon, List<double[]> levels) { }
+
+    // prijzen/categorieen worden ook vanuit de netwerk-thread gelezen: volatile + nooit aanpassen na het bouwen
     private volatile Map<Material, Double> prices = new EnumMap<>(Material.class);
     private volatile double priceScale = 1.0;
+    private volatile Map<Material, Integer> categoryOf = new EnumMap<>(Material.class);
+    private volatile int defaultCategory = 0;
+    private volatile List<Category> categories = new ArrayList<>();
 
-    private final Map<UUID, Double> soldTotals = new ConcurrentHashMap<>();
-    private final Map<UUID, Double> multiplierCache = new ConcurrentHashMap<>();
+    private final Map<UUID, double[]> soldTotals = new ConcurrentHashMap<>();      // per categorie
+    private final Map<UUID, double[]> multiplierCache = new ConcurrentHashMap<>(); // per categorie
     private final Set<UUID> creative = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, ItemStack[]> stash = new ConcurrentHashMap<>();
+    private final Set<UUID> switching = ConcurrentHashMap.newKeySet();
     private volatile boolean dirty = false;
 
-    private List<double[]> levels = new ArrayList<>();
     private File dataFile;
     private Economy economy;
     private Object worthLore;
@@ -78,6 +93,24 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     private static class SellHolder implements InventoryHolder {
         private Inventory inv;
         @Override public @NotNull Inventory getInventory() { return inv; }
+    }
+
+    private static class ProgressHolder implements InventoryHolder {
+        private Inventory inv;
+        private final int category;
+        ProgressHolder(int category) { this.category = category; }
+        @Override public @NotNull Inventory getInventory() { return inv; }
+    }
+
+    /** De "kronkel": rij 1 naar rechts, bocht, rij 3 naar links, bocht, rij 5 naar rechts. */
+    private static int[] buildPath() {
+        List<Integer> l = new ArrayList<>();
+        for (int s = 9; s <= 17; s++) l.add(s);
+        l.add(26);
+        for (int s = 35; s >= 27; s--) l.add(s);
+        l.add(36);
+        for (int s = 45; s <= 53; s++) l.add(s);
+        return l.stream().mapToInt(Integer::intValue).toArray();
     }
 
     // ------------------------------------------------------------------ start / stop
@@ -94,8 +127,8 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         economy = rsp.getProvider();
 
         dataFile = new File(getDataFolder(), "data.yml");
+        loadCategories();
         loadData();
-        loadLevels();
         loadPrices();
 
         getServer().getPluginManager().registerEvents(this, this);
@@ -104,13 +137,17 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         setupWorthLore();
 
         for (Player p : Bukkit.getOnlinePlayers()) refreshPlayer(p);
-        // multiplier-cache verversen (permissies kunnen wijzigen) en data opslaan
         getServer().getScheduler().runTaskTimer(this, this::refreshAll, 200L, 600L);
         getServer().getScheduler().runTaskTimerAsynchronously(this, () -> { if (dirty) saveData(); }, 1200L, 6000L);
     }
 
     @Override
     public void onDisable() {
+        // items die in het menu stonden teruggeven
+        for (UUID id : new ArrayList<>(stash.keySet())) {
+            Player p = Bukkit.getPlayer(id);
+            if (p != null) giveBackStash(p);
+        }
         if (worthLore != null) {
             try { WorthLore.unregister(worthLore); } catch (Throwable ignored) { }
         }
@@ -131,21 +168,81 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         }
     }
 
-    // ------------------------------------------------------------------ data
+    // ------------------------------------------------------------------ laden / opslaan
+
+    private void loadCategories() {
+        List<double[]> base = new ArrayList<>();
+        ConfigurationSection ls = getConfig().getConfigurationSection("category-levels");
+        if (ls != null) {
+            for (String k : ls.getKeys(false)) {
+                try { base.add(new double[]{Double.parseDouble(k), ls.getDouble(k)}); } catch (NumberFormatException ignored) { }
+            }
+        }
+        if (base.isEmpty()) base.add(new double[]{0, 1.0});
+        base.sort(Comparator.comparingDouble(a -> a[0]));
+
+        List<Category> list = new ArrayList<>();
+        ConfigurationSection cs = getConfig().getConfigurationSection("categories");
+        if (cs != null) {
+            for (String key : cs.getKeys(false)) {
+                if (list.size() >= 9) break;
+                ConfigurationSection c = cs.getConfigurationSection(key);
+                if (c == null) continue;
+                Material icon = Material.matchMaterial(c.getString("icon", "STONE"));
+                if (icon == null) icon = Material.STONE;
+                double scale = Math.max(0.0001, c.getDouble("scale", 1.0));
+                List<double[]> lv = new ArrayList<>();
+                for (double[] b : base) lv.add(new double[]{(double) Math.round(b[0] * scale), b[1]});
+                list.add(new Category(key, c.getString("name", key), icon, lv));
+            }
+        }
+        if (list.isEmpty()) list.add(new Category("all", "<green>Alles", Material.CHEST, base));
+
+        File f = new File(getDataFolder(), "categories.yml");
+        if (!f.exists()) saveResource("categories.yml", false);
+        YamlConfiguration y = YamlConfiguration.loadConfiguration(f);
+        Map<Material, Integer> map = new EnumMap<>(Material.class);
+        for (int i = 0; i < list.size(); i++) {
+            for (String n : y.getStringList("items." + list.get(i).id())) {
+                Material m = Material.getMaterial(n);
+                if (m != null) map.putIfAbsent(m, i);
+            }
+        }
+        String def = getConfig().getString("default-category", "decor");
+        int defIdx = list.size() - 1;
+        for (int i = 0; i < list.size(); i++) if (list.get(i).id().equals(def)) defIdx = i;
+
+        categoryOf = map;
+        defaultCategory = defIdx;
+        categories = list;
+    }
 
     private void loadData() {
         soldTotals.clear();
         YamlConfiguration y = YamlConfiguration.loadConfiguration(dataFile);
         ConfigurationSection s = y.getConfigurationSection("sold");
         if (s == null) return;
+        List<Category> cats = categories;
         for (String k : s.getKeys(false)) {
-            try { soldTotals.put(UUID.fromString(k), s.getDouble(k)); } catch (IllegalArgumentException ignored) { }
+            UUID id;
+            try { id = UUID.fromString(k); } catch (IllegalArgumentException e) { continue; }
+            ConfigurationSection ps = s.getConfigurationSection(k);
+            if (ps == null) continue; // oud formaat, overslaan
+            double[] arr = new double[cats.size()];
+            for (int i = 0; i < arr.length; i++) arr[i] = ps.getDouble(cats.get(i).id(), 0);
+            soldTotals.put(id, arr);
         }
     }
 
     private synchronized void saveData() {
         YamlConfiguration y = new YamlConfiguration();
-        for (Map.Entry<UUID, Double> e : soldTotals.entrySet()) y.set("sold." + e.getKey(), e.getValue());
+        List<Category> cats = categories;
+        for (Map.Entry<UUID, double[]> e : soldTotals.entrySet()) {
+            double[] arr = e.getValue();
+            for (int i = 0; i < arr.length && i < cats.size(); i++) {
+                if (arr[i] > 0) y.set("sold." + e.getKey() + "." + cats.get(i).id(), arr[i]);
+            }
+        }
         try {
             getDataFolder().mkdirs();
             y.save(dataFile);
@@ -153,18 +250,6 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         } catch (IOException e) {
             getLogger().warning("Kon data.yml niet opslaan: " + e.getMessage());
         }
-    }
-
-    private void loadLevels() {
-        levels = new ArrayList<>();
-        ConfigurationSection s = getConfig().getConfigurationSection("levels");
-        if (s != null) {
-            for (String k : s.getKeys(false)) {
-                try { levels.add(new double[]{Double.parseDouble(k), s.getDouble(k)}); } catch (NumberFormatException ignored) { }
-            }
-        }
-        if (levels.isEmpty()) levels.add(new double[]{0, 1.0});
-        levels.sort(Comparator.comparingDouble(a -> a[0]));
     }
 
     private static boolean isSellableType(Material m) {
@@ -195,7 +280,6 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             map.put(m, sec.getDouble(key));
         }
 
-        // Alle ontbrekende items automatisch toevoegen zodat echt elk item erin staat
         double fallback = getConfig().getDouble("fallback-price", 1.0);
         int added = 0;
         for (Material m : Material.values()) {
@@ -221,17 +305,28 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     // ------------------------------------------------------------------ multiplier
 
-    private double progressMultiplier(double sold) {
+    private int categoryIndex(Material m) {
+        return categoryOf.getOrDefault(m, defaultCategory);
+    }
+
+    /** Het (live) array met verkochte bedragen van een speler, per categorie. */
+    private double[] soldOf(UUID id) {
+        int n = categories.size();
+        return soldTotals.compute(id, (k, arr) -> (arr == null || arr.length != n)
+                ? (arr == null ? new double[n] : Arrays.copyOf(arr, n)) : arr);
+    }
+
+    private double progress(int cat, double sold) {
         double m = 1.0;
-        for (double[] l : levels) if (sold >= l[0]) m = l[1];
+        for (double[] l : categories.get(cat).levels()) if (sold >= l[0]) m = l[1];
         return Math.min(m, getConfig().getDouble("max-multiplier", 3.0));
     }
 
     /** {drempel, multiplier} van het volgende level, of null bij max. */
-    private double[] nextLevel(double sold) {
-        double current = progressMultiplier(sold);
+    private double[] nextLevel(int cat, double sold) {
+        double current = progress(cat, sold);
         double cap = getConfig().getDouble("max-multiplier", 3.0);
-        for (double[] l : levels) {
+        for (double[] l : categories.get(cat).levels()) {
             if (l[0] > sold && Math.min(l[1], cap) > current) return new double[]{l[0], Math.min(l[1], cap)};
         }
         return null;
@@ -252,16 +347,17 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         return Math.max(0, getConfig().getDouble("global-multiplier", 1.0));
     }
 
-    private double sold(UUID id) {
-        return soldTotals.getOrDefault(id, 0.0);
-    }
-
-    private double totalMultiplier(Player p) {
-        return (progressMultiplier(sold(p.getUniqueId())) + rankBonus(p)) * globalMultiplier();
+    private double[] computeMultipliers(Player p) {
+        double[] sold = soldOf(p.getUniqueId());
+        double bonus = rankBonus(p);
+        double global = globalMultiplier();
+        double[] out = new double[categories.size()];
+        for (int i = 0; i < out.length; i++) out[i] = (progress(i, sold[i]) + bonus) * global;
+        return out;
     }
 
     private void refreshPlayer(Player p) {
-        multiplierCache.put(p.getUniqueId(), totalMultiplier(p));
+        multiplierCache.put(p.getUniqueId(), computeMultipliers(p));
         if (p.getGameMode() == GameMode.CREATIVE) creative.add(p.getUniqueId());
         else creative.remove(p.getUniqueId());
     }
@@ -278,8 +374,11 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
-        multiplierCache.remove(e.getPlayer().getUniqueId());
-        creative.remove(e.getPlayer().getUniqueId());
+        Player p = e.getPlayer();
+        giveBackStash(p);
+        switching.remove(p.getUniqueId());
+        multiplierCache.remove(p.getUniqueId());
+        creative.remove(p.getUniqueId());
     }
 
     @EventHandler
@@ -324,12 +423,185 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     double displayUnitPrice(ItemStack item, UUID id) {
         double unit = unitPrice(item, false);
         if (unit < 0) return -1;
-        return unit * multiplierCache.getOrDefault(id, 1.0);
+        double[] arr = multiplierCache.get(id);
+        int c = categoryIndex(item.getType());
+        double mult = (arr != null && c < arr.length) ? arr[c] : 1.0;
+        return unit * mult;
     }
 
     Component loreLine(String key, double unit, double stack) {
         String s = getConfig().getString("worth-lore." + key, "");
         return MM.deserialize(s.replace("{price}", fmt(unit)).replace("{stack}", fmt(stack)));
+    }
+
+    // ------------------------------------------------------------------ menu's
+
+    private String str(String path) {
+        return getConfig().getString(path, "");
+    }
+
+    private Component line(String path, String... replacements) {
+        String s = str(path);
+        for (int i = 0; i + 1 < replacements.length; i += 2) s = s.replace(replacements[i], replacements[i + 1]);
+        return MM.deserialize(s);
+    }
+
+    private ItemStack categoryIcon(Player p, int cat, boolean clickLine) {
+        Category c = categories.get(cat);
+        double sold = soldOf(p.getUniqueId())[cat];
+        double total = (progress(cat, sold) + rankBonus(p)) * globalMultiplier();
+
+        List<Component> lore = new ArrayList<>();
+        lore.add(line("gui.multiplier-line", "{multiplier}", fmt(total)));
+        lore.add(line("gui.sold-line", "{sold}", fmt(sold)));
+        double[] next = nextLevel(cat, sold);
+        if (next == null) lore.add(line("gui.max-line"));
+        else lore.add(line("gui.next-line", "{next}", fmt(next[1]), "{needed}", fmt(next[0])));
+        if (clickLine) {
+            lore.add(Component.empty());
+            lore.add(line("gui.click-line"));
+        }
+
+        ItemStack it = new ItemStack(c.icon());
+        it.editMeta(m -> {
+            m.displayName(MM.deserialize("<!italic>" + c.name()));
+            m.lore(lore);
+        });
+        return it;
+    }
+
+    private void openSell(Player p, ItemStack[] items) {
+        SellHolder holder = new SellHolder();
+        holder.inv = Bukkit.createInventory(holder, 54, MM.deserialize(str("gui.sell-title")));
+        for (int i = 0; i < categories.size() && i < 9; i++) {
+            holder.inv.setItem(ITEM_SLOTS + i, categoryIcon(p, i, true));
+        }
+        if (items != null) {
+            for (int i = 0; i < ITEM_SLOTS && i < items.length; i++) holder.inv.setItem(i, items[i]);
+        }
+        p.openInventory(holder.inv);
+    }
+
+    private static int cellOf(int levelIndex, int levelCount, int cells) {
+        if (levelCount <= 1) return 0;
+        return levelIndex * (cells - 1) / (levelCount - 1);
+    }
+
+    private ItemStack pane(Material mat, Component name, List<Component> lore) {
+        ItemStack it = new ItemStack(mat);
+        it.editMeta(m -> {
+            m.displayName(name);
+            if (lore != null) m.lore(lore);
+        });
+        return it;
+    }
+
+    private Inventory buildProgress(Player p, int cat) {
+        Category c = categories.get(cat);
+        ProgressHolder holder = new ProgressHolder(cat);
+        holder.inv = Bukkit.createInventory(holder, 54,
+                MM.deserialize(str("gui.progress-title").replace("{category}", c.name())));
+
+        double sold = soldOf(p.getUniqueId())[cat];
+        double cap = getConfig().getDouble("max-multiplier", 3.0);
+        List<double[]> lv = c.levels();
+        int cells = PATH.length;
+
+        int reachedLevel = -1;
+        for (int i = 0; i < lv.size(); i++) if (sold >= lv.get(i)[0]) reachedLevel = i;
+        int reachedCell = reachedLevel < 0 ? -1 : cellOf(reachedLevel, lv.size(), cells);
+
+        // de kronkel zelf: groen tot waar je bent, grijs daarna
+        for (int cell = 0; cell < cells; cell++) {
+            Material mat = cell <= reachedCell ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE;
+            holder.inv.setItem(PATH[cell], pane(mat, Component.text(" "), null));
+        }
+
+        // de levels zelf op de kronkel
+        for (int i = 0; i < lv.size(); i++) {
+            double[] l = lv.get(i);
+            boolean reached = sold >= l[0];
+            String mult = fmt(Math.min(l[1], cap));
+            List<Component> lore = new ArrayList<>();
+            lore.add(line("gui.level-from", "{needed}", fmt(l[0])));
+            if (!reached) lore.add(line("gui.level-remaining", "{remaining}", fmt(l[0] - sold)));
+            holder.inv.setItem(PATH[cellOf(i, lv.size(), cells)], pane(
+                    reached ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE,
+                    line(reached ? "gui.level-reached" : "gui.level-locked", "{multiplier}", mult),
+                    lore));
+        }
+
+        holder.inv.setItem(4, categoryIcon(p, cat, false));
+        holder.inv.setItem(BACK_SLOT, pane(Material.ARROW, line("gui.back"), null));
+        return holder.inv;
+    }
+
+    private void giveBackStash(Player p) {
+        ItemStack[] items = stash.remove(p.getUniqueId());
+        if (items == null) return;
+        for (ItemStack it : items) if (it != null) giveBack(p, it);
+    }
+
+    private void giveBack(Player p, ItemStack item) {
+        Map<Integer, ItemStack> leftover = p.getInventory().addItem(item);
+        leftover.values().forEach(i -> p.getWorld().dropItem(p.getLocation(), i));
+    }
+
+    // ------------------------------------------------------------------ menu events
+
+    @EventHandler
+    public void onClick(InventoryClickEvent e) {
+        if (!(e.getWhoClicked() instanceof Player player)) return;
+        Inventory top = e.getView().getTopInventory();
+        InventoryHolder holder = top.getHolder();
+
+        if (holder instanceof ProgressHolder) {
+            e.setCancelled(true);
+            if (e.getClickedInventory() == top && e.getRawSlot() == BACK_SLOT) {
+                UUID id = player.getUniqueId();
+                ItemStack[] items = stash.remove(id);
+                switching.add(id);
+                Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
+            }
+            return;
+        }
+
+        if (holder instanceof SellHolder) {
+            int raw = e.getRawSlot();
+            if (raw >= ITEM_SLOTS && raw < top.getSize()) {
+                e.setCancelled(true);
+                int cat = raw - ITEM_SLOTS;
+                if (cat < categories.size() && (e.getClick().isLeftClick() || e.getClick().isRightClick())) {
+                    ItemStack[] copy = new ItemStack[ITEM_SLOTS];
+                    for (int i = 0; i < ITEM_SLOTS; i++) {
+                        ItemStack it = top.getItem(i);
+                        copy[i] = it == null ? null : it.clone();
+                    }
+                    UUID id = player.getUniqueId();
+                    stash.put(id, copy);
+                    switching.add(id);
+                    Bukkit.getScheduler().runTask(this, () -> player.openInventory(buildProgress(player, cat)));
+                }
+                return;
+            }
+            if (e.getClick() == ClickType.DOUBLE_CLICK) e.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onDrag(InventoryDragEvent e) {
+        Inventory top = e.getView().getTopInventory();
+        InventoryHolder holder = top.getHolder();
+        if (holder instanceof ProgressHolder) {
+            e.setCancelled(true);
+        } else if (holder instanceof SellHolder) {
+            for (int raw : e.getRawSlots()) {
+                if (raw >= ITEM_SLOTS && raw < top.getSize()) {
+                    e.setCancelled(true);
+                    return;
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ command
@@ -347,7 +619,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (sub.equals("reload")) {
             if (!sender.hasPermission("sell.admin")) { sender.sendMessage(msg("no-permission")); return true; }
             reloadConfig();
-            loadLevels();
+            loadCategories();
             loadPrices();
             refreshAll();
             sender.sendMessage(msg("reloaded"));
@@ -374,18 +646,14 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (!player.hasPermission("sell.use")) { player.sendMessage(msg("no-permission")); return true; }
 
         if (sub.equals("multiplier")) {
-            double sold = sold(player.getUniqueId());
-            player.sendMessage(msg("multiplier",
-                    "{multiplier}", fmt(totalMultiplier(player)),
-                    "{progress}", fmt(progressMultiplier(sold)),
-                    "{bonus}", fmt(rankBonus(player)),
-                    "{global}", fmt(globalMultiplier())));
-            double[] next = nextLevel(sold);
-            if (next == null) {
-                player.sendMessage(msg("progress-max"));
-            } else {
-                player.sendMessage(msg("progress",
-                        "{sold}", fmt(sold), "{next}", fmt(next[1]), "{needed}", fmt(next[0])));
+            double[] sold = soldOf(player.getUniqueId());
+            double[] mult = computeMultipliers(player);
+            player.sendMessage(msg("multiplier-header", "{bonus}", fmt(rankBonus(player)), "{global}", fmt(globalMultiplier())));
+            for (int i = 0; i < categories.size(); i++) {
+                player.sendMessage(msg("multiplier-line",
+                        "{category}", categories.get(i).name(),
+                        "{multiplier}", fmt(mult[i]),
+                        "{progress}", fmt(progress(i, sold[i]))));
             }
             return true;
         }
@@ -394,7 +662,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             if (hand.getType().isAir()) { player.sendMessage(msg("hold-item")); return true; }
             double unit = unitPrice(hand, true);
             if (unit < 0) { player.sendMessage(msg("not-sellable")); return true; }
-            double mult = totalMultiplier(player);
+            double mult = computeMultipliers(player)[categoryIndex(hand.getType())];
             player.sendMessage(msg("worth",
                     "{item}", hand.getType().name().toLowerCase(Locale.ROOT).replace('_', ' '),
                     "{price}", fmt(unit * mult),
@@ -403,10 +671,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             return true;
         }
 
-        int rows = Math.max(1, Math.min(6, getConfig().getInt("rows", 6)));
-        SellHolder holder = new SellHolder();
-        holder.inv = Bukkit.createInventory(holder, rows * 9, MM.deserialize(getConfig().getString("title", "Sell")));
-        player.openInventory(holder.inv);
+        openSell(player, null);
         return true;
     }
 
@@ -423,48 +688,71 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     @EventHandler
     public void onClose(InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof SellHolder)) return;
         if (!(event.getPlayer() instanceof Player player)) return;
+        InventoryHolder holder = event.getInventory().getHolder();
+        UUID id = player.getUniqueId();
 
-        double base = 0;
+        if (holder instanceof ProgressHolder) {
+            if (switching.remove(id)) return;   // we gaan terug naar het sell-menu
+            giveBackStash(player);              // menu gesloten: items veilig teruggeven
+            return;
+        }
+        if (!(holder instanceof SellHolder)) return;
+        if (switching.remove(id)) {             // we wisselen naar het overzicht, niet verkopen
+            event.getInventory().clear();
+            return;
+        }
+
+        int n = categories.size();
+        double[] base = new double[n];
         int count = 0;
-        for (ItemStack item : event.getInventory().getContents()) {
+        ItemStack[] contents = event.getInventory().getContents();
+        for (int i = 0; i < ITEM_SLOTS && i < contents.length; i++) {
+            ItemStack item = contents[i];
             if (item == null || item.getType().isAir()) continue;
             double unit = unitPrice(item, true);
             if (unit < 0) {
-                Map<Integer, ItemStack> leftover = player.getInventory().addItem(item);
-                leftover.values().forEach(i -> player.getWorld().dropItem(player.getLocation(), i));
+                giveBack(player, item);
                 continue;
             }
-            base += unit * item.getAmount();
+            base[categoryIndex(item.getType())] += unit * item.getAmount();
             count += item.getAmount();
         }
         event.getInventory().clear();
 
-        if (base <= 0) {
+        double baseTotal = 0;
+        for (double b : base) baseTotal += b;
+        if (baseTotal <= 0) {
             player.updateInventory();
             return;
         }
 
-        UUID id = player.getUniqueId();
-        double before = progressMultiplier(sold(id));
-        double mult = totalMultiplier(player);
-        double money = Math.round(base * mult * 100.0) / 100.0;
-
-        economy.depositPlayer(player, money);
-        soldTotals.merge(id, base, Double::sum);   // level telt het bedrag zonder multiplier
+        double[] sold = soldOf(id);
+        double[] mult = computeMultipliers(player);
+        double[] before = new double[n];
+        double money = 0;
+        for (int i = 0; i < n; i++) {
+            before[i] = progress(i, sold[i]);
+            money += base[i] * mult[i];
+            sold[i] += base[i];     // level telt het bedrag zonder multiplier
+        }
+        money = Math.round(money * 100.0) / 100.0;
         dirty = true;
 
+        economy.depositPlayer(player, money);
         player.sendMessage(msg("sold",
                 "{items}", String.valueOf(count),
                 "{money}", String.format(Locale.US, "%,.2f", money),
-                "{multiplier}", fmt(mult)));
+                "{multiplier}", fmt(money / baseTotal)));
         player.playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1f, 1f);
 
-        double after = progressMultiplier(sold(id));
-        if (after > before) {
-            player.sendMessage(msg("levelup", "{progress}", fmt(after)));
-            player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 1f);
+        for (int i = 0; i < n; i++) {
+            double after = progress(i, sold[i]);
+            if (after > before[i]) {
+                player.sendMessage(msg("category-levelup",
+                        "{category}", categories.get(i).name(), "{progress}", fmt(after)));
+                player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 1f);
+            }
         }
         refreshPlayer(player);
         player.updateInventory();
