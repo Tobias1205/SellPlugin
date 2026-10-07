@@ -674,7 +674,10 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         holder.inv.setItem(1, categoryIcon(p, cat, "gui.items-click-line"));
 
         // Multiplier-levels exact op de gevraagde W-posities.
-        for (int i = 0; i < Math.min(lv.size(), levelSlots.length); i++) {
+        // Level 0 (x1.0) is de basis-multiplier en wordt niet als level in
+        // de GUI getoond. Daardoor lopen de zichtbare levels netjes van
+        // x1.1 t/m x3.0 over alle 20 W-slots.
+        for (int i = 1; i < lv.size() && (i - 1) < levelSlots.length; i++) {
             double[] l = lv.get(i);
             boolean reached = sold >= l[0];
             String mult = fmt(Math.min(l[1], cap));
@@ -693,7 +696,12 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                     lore));
         }
 
-        // Onderste rij: alleen de terugknop links.
+        // Onderste rij: donkere glasrand, met alleen de terugknop links.
+        // Zo blijft de hele onderste rij netjes gevuld.
+        for (int col = 0; col < 9; col++) {
+            holder.inv.setItem(45 + col,
+                    pane(Material.BLACK_STAINED_GLASS_PANE, Component.text(" "), null));
+        }
         holder.inv.setItem(45, pane(Material.ARROW, line("gui.back-overview"), null));
         return holder.inv;
     }
