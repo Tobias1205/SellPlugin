@@ -128,23 +128,26 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     private record Listed(ItemStack item, double price) { }
 
     /**
-     * Vaste S-vorm voor de multiplier-levels.
-     * De 21 levels (x1.0 t/m x3.0) staan direct achter elkaar in de route.
-     * De bovenste rij begint links en de route loopt daarna als een S naar
-     * beneden. Er worden geen lege slots tussen de multiplier-levels gezet.
+     * Vaste W-vorm voor de multiplier-levels.
+     * De 20 levels (x1.1 t/m x3.0) staan direct achter elkaar in de route.
      */
     private static int[] buildPath() {
-        // W-vorm over 4 rijen en 5 kolommen.
-        // De route bestaat uit precies 20 aaneengesloten slots, één voor
-        // ieder multiplier-level van x1.1 t/m x3.0. Er zitten dus geen
-        // lege slots tussen de levels. De route loopt verticaal omlaag,
-        // omhoog, omlaag, omhoog en eindigt omlaag: een duidelijke W-vorm.
+        // W-vorm zoals in de GUI:
+        // rij 1: x1.1                x1.9 x2.0 x2.1                x2.9
+        // rij 2: x1.2                x1.8       x2.2                x2.8
+        // rij 3: x1.3                x1.7       x2.3                x2.7
+        // rij 4: x1.4 x1.5 x1.6                x2.4 x2.5 x2.6
+        // rij 5: x1.4 x1.5 x1.6                x2.4 x2.5 x2.6
+        // x3.0 staat als eindpunt rechtsboven.
+        // De tussenliggende cellen worden als rand/pane ingevuld; de levels
+        // zelf staan alleen op de W-punten.
         return new int[] {
-                0, 9, 18, 27,
-                28, 19, 10, 1,
-                2, 11, 20, 29,
-                30, 21, 12, 3,
-                4, 13, 22, 31
+                9, 18, 27, 36, 37, 38,    // x1.1 - x1.6
+                30, 21, 12,                // x1.7 - x1.9
+                13, 14,                    // x2.0 - x2.1
+                23, 32, 41, 42, 43,        // x2.2 - x2.6
+                35, 26, 17,                // x2.7 - x2.9
+                8                          // x3.0
         };
     }
 
@@ -654,27 +657,28 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         double sold = soldOf(p.getUniqueId())[cat];
         double cap = getConfig().getDouble("max-multiplier", 3.0);
         List<double[]> lv = c.levels();
-        int cells = PATH.length;
+        int[] levelSlots = PATH;
 
-        int reachedLevel = -1;
-        for (int i = 0; i < lv.size(); i++) if (sold >= lv.get(i)[0]) reachedLevel = i;
-        int reachedCell = reachedLevel < 0 ? -1 : cellOf(reachedLevel, lv.size(), cells);
-
-        // de kronkel zelf: groen tot waar je bent, grijs daarna
-        for (int cell = 0; cell < cells; cell++) {
-            Material mat = cell <= reachedCell ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE;
-            holder.inv.setItem(PATH[cell], pane(mat, Component.text(" "), null));
+        // De W krijgt een duidelijke rand: alle slots van de eerste vijf rijen
+        // worden eerst gevuld met grijze panes. De multiplier-slots vervangen
+        // daarna precies de juiste randpunten. Zo blijven de open vakken tussen
+        // de twee helften van de W zichtbaar.
+        for (int row = 0; row < 5; row++) {
+            for (int col = 0; col < 9; col++) {
+                holder.inv.setItem(row * 9 + col,
+                        pane(Material.GRAY_STAINED_GLASS_PANE, Component.text(" "), null));
+            }
         }
 
-        // de levels zelf op de kronkel
-        for (int i = 0; i < lv.size(); i++) {
+        // x1.1 t/m x3.0 op de W-punten.
+        for (int i = 0; i < Math.min(lv.size(), levelSlots.length); i++) {
             double[] l = lv.get(i);
             boolean reached = sold >= l[0];
             String mult = fmt(Math.min(l[1], cap));
             List<Component> lore = new ArrayList<>();
             lore.add(line("gui.level-from", "{needed}", fmt(l[0])));
             if (!reached) lore.add(line("gui.level-remaining", "{remaining}", fmt(l[0] - sold)));
-            holder.inv.setItem(PATH[cellOf(i, lv.size(), cells)], pane(
+            holder.inv.setItem(levelSlots[i], pane(
                     reached ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE,
                     line(reached ? "gui.level-reached" : "gui.level-locked", "{multiplier}", mult),
                     lore));
