@@ -669,8 +669,9 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             }
         }
 
-        // Het categorie-icoon staat altijd bovenaan op slot 1. Dit is de knop
-        // om alle items van deze categorie te bekijken.
+        // Het categorie-icoon staat bovenaan op slot 1. Dit is de ENIGE
+        // knop in het W-gedeelte om alle verkoopbare items van deze categorie
+        // te bekijken. De multiplier-vakjes zelf zijn bewust niet-klikbaar.
         holder.inv.setItem(1, categoryIcon(p, cat, "gui.items-click-line"));
 
         // Multiplier-levels exact op de gevraagde W-posities.
@@ -711,10 +712,20 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         String id = categories.get(cat).id();
         List<Listed> out = new ArrayList<>();
 
-        for (Map.Entry<Material, Double> e : prices.entrySet()) {
-            if (e.getValue() <= 0 || categoryIndex(e.getKey()) != cat) continue;
-            double price = e.getValue() * priceScale * mult;
-            ItemStack it = new ItemStack(e.getKey());
+        // Gebruik de categorie-indeling als bron van waarheid. Hierdoor blijven
+        // ALLE items uit categories.yml zichtbaar, ook wanneer een item nog niet
+        // handmatig in prices.yml stond. loadPrices() heeft daarvoor al een
+        // fallback-prijs aangemaakt.
+        Set<Material> categoryMaterials = EnumSet.noneOf(Material.class);
+        for (Map.Entry<Material, Integer> e : categoryOf.entrySet()) {
+            if (e.getValue() == cat && isSellableType(e.getKey())) categoryMaterials.add(e.getKey());
+        }
+
+        for (Material material : categoryMaterials) {
+            double base = prices.getOrDefault(material, getConfig().getDouble("fallback-price", 1.0));
+            if (base <= 0) continue;
+            double price = base * priceScale * mult;
+            ItemStack it = new ItemStack(material);
             it.editMeta(m -> m.lore(List.of(loreLine(price))));
             out.add(new Listed(it, price));
         }
@@ -767,9 +778,15 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             int idx = page * ITEM_SLOTS + i;
             if (idx < all.size()) holder.inv.setItem(i, all.get(idx).item());
         }
-        if (page > 0) holder.inv.setItem(45, pane(Material.ARROW, line("gui.prev"), null));
+        // Onderste rij van het item-menu: terug | vorige | categorie | volgende.
+        // Slot 45 = terug naar /sell, 48 = vorige pagina, 49 = categorie/W, 50 = volgende pagina.
+        holder.inv.setItem(45, pane(Material.ARROW, line("gui.back-overview"), null));
+        if (page > 0) holder.inv.setItem(48, pane(Material.ARROW, line("gui.prev"), null));
         holder.inv.setItem(49, pane(Material.ARROW, line("gui.back-overview"), null));
-        if (holder.hasNext) holder.inv.setItem(53, pane(Material.ARROW, line("gui.next"), null));
+        if (holder.hasNext) holder.inv.setItem(50, pane(Material.ARROW, line("gui.next"), null));
+        for (int slot : new int[]{46, 47, 51, 52, 53}) {
+            holder.inv.setItem(slot, pane(Material.BLACK_STAINED_GLASS_PANE, Component.text(" "), null));
+        }
         return holder.inv;
     }
 
@@ -808,7 +825,8 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 ItemStack[] items = stash.remove(id);
                 switching.add(id);
                 Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
-            } else if (e.getRawSlot() == 49) {
+            } else if (e.getRawSlot() == 1) {
+                // Categorie-icoon: toon ALLE verkoopbare items van deze categorie.
                 switchMenu(player, () -> buildItems(player, ph.category, 0));
             }
             return;
