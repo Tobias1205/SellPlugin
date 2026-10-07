@@ -134,12 +134,15 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
      * beneden. Er worden geen lege slots tussen de multiplier-levels gezet.
      */
     private static int[] buildPath() {
-        // 21 aansluitende slots: bovenste rij 9, midden 3, onderste rij 9.
-        // Dit vormt een compacte S zonder lege slots tussen de levels.
+        // S-vorm zoals de progress-menu's: 9 slots boven, één verbindingsslot,
+        // 9 slots terug, één verbindingsslot. De 20 zichtbare multiplier-levels
+        // (x1.1 t/m x3.0) staan direct achter elkaar; er zitten geen lege slots
+        // tussen de levels. x1.0 is de beginstatus en krijgt geen eigen level-slot.
         return new int[] {
                 0, 1, 2, 3, 4, 5, 6, 7, 8,
-                17, 16, 15,
-                24, 25, 26, 27, 28, 29, 30, 31, 32
+                17,
+                26, 25, 24, 23, 22, 21, 20, 19, 18,
+                27
         };
     }
 
