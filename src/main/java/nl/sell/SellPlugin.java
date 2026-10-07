@@ -63,7 +63,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     /** Slots 0-44 zijn voor items, de onderste rij (45-53) voor de categorie-iconen. */
     private static final int ITEM_SLOTS = 45;
-    private static final int BACK_SLOT = 49;
+    private static final int BACK_SLOT = 45;
     private static final int[] PATH = buildPath();
 
     /** Items die nooit verkocht kunnen worden (niet verkrijgbaar of met data). */
@@ -128,20 +128,19 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     private record Listed(ItemStack item, double price) { }
 
     /**
-     * De multiplier-S: begint helemaal bovenaan, gaat rechts naar beneden,
-     * daarna terug naar links, vervolgens weer naar beneden en eindigt rechts.
-     * De onderste rij blijft vrij voor de terugknop.
+     * Vaste S-vorm voor de multiplier-levels.
+     * De 21 levels (x1.0 t/m x3.0) staan direct achter elkaar in de route.
+     * De bovenste rij begint links en de route loopt daarna als een S naar
+     * beneden. Er worden geen lege slots tussen de multiplier-levels gezet.
      */
     private static int[] buildPath() {
-        List<Integer> l = new ArrayList<>();
-        for (int s = 0; s <= 8; s++) l.add(s);          // bovenste rij →
-        l.add(17);                                      // bocht omlaag
-        for (int s = 16; s >= 9; s--) l.add(s);         // tweede rij ←
-        l.add(18);                                      // bocht omlaag
-        for (int s = 19; s <= 26; s++) l.add(s);        // derde rij →
-        l.add(35);                                      // bocht omlaag
-        for (int s = 34; s >= 27; s--) l.add(s);        // vierde rij ←
-        return l.stream().mapToInt(Integer::intValue).toArray();
+        // 21 aansluitende slots: bovenste rij 9, midden 3, onderste rij 9.
+        // Dit vormt een compacte S zonder lege slots tussen de levels.
+        return new int[] {
+                0, 1, 2, 3, 4, 5, 6, 7, 8,
+                17, 16, 15,
+                24, 25, 26, 27, 28, 29, 30, 31, 32
+        };
     }
 
     // ------------------------------------------------------------------ start / stop
@@ -676,8 +675,9 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                     lore));
         }
 
-        holder.inv.setItem(48, categoryIcon(p, cat, "gui.items-click-line"));
-        holder.inv.setItem(BACK_SLOT, pane(Material.ARROW, line("gui.back"), null));
+        // Onderste rij: terug naar /sell links, categorie in het midden.
+        holder.inv.setItem(45, pane(Material.ARROW, line("gui.back-overview"), null));
+        holder.inv.setItem(49, categoryIcon(p, cat, "gui.items-click-line"));
         return holder.inv;
     }
 
@@ -783,7 +783,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 ItemStack[] items = stash.remove(id);
                 switching.add(id);
                 Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
-            } else if (e.getRawSlot() == 48) {
+            } else if (e.getRawSlot() == 49) {
                 switchMenu(player, () -> buildItems(player, ph.category, 0));
             }
             return;
@@ -793,9 +793,14 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             e.setCancelled(true);
             if (e.getClickedInventory() != top) return;
             int raw = e.getRawSlot();
-            if (raw == 45 && ih.page > 0) {
+            if (raw == 45) {
+                UUID id = player.getUniqueId();
+                ItemStack[] items = stash.remove(id);
+                switching.add(id);
+                Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
+            } else if (raw == 48 && ih.page > 0) {
                 switchMenu(player, () -> buildItems(player, ih.category, ih.page - 1));
-            } else if (raw == 53 && ih.hasNext) {
+            } else if (raw == 50 && ih.hasNext) {
                 switchMenu(player, () -> buildItems(player, ih.category, ih.page + 1));
             } else if (raw == 49) {
                 switchMenu(player, () -> buildProgress(player, ih.category));
