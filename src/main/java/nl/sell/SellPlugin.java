@@ -63,7 +63,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     /** Slots 0-44 zijn voor items, de onderste rij (45-53) voor de categorie-iconen. */
     private static final int ITEM_SLOTS = 45;
-    private static final int BACK_SLOT = 0;
+    private static final int BACK_SLOT = 49;
     private static final int[] PATH = buildPath();
 
     /** Items die nooit verkocht kunnen worden (niet verkrijgbaar of met data). */
@@ -127,14 +127,20 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     private record Listed(ItemStack item, double price) { }
 
-    /** De "kronkel": rij 1 naar rechts, bocht, rij 3 naar links, bocht, rij 5 naar rechts. */
+    /**
+     * De multiplier-S: begint helemaal bovenaan, gaat rechts naar beneden,
+     * daarna terug naar links, vervolgens weer naar beneden en eindigt rechts.
+     * De onderste rij blijft vrij voor de terugknop.
+     */
     private static int[] buildPath() {
         List<Integer> l = new ArrayList<>();
-        for (int s = 9; s <= 17; s++) l.add(s);
-        l.add(26);
-        for (int s = 35; s >= 27; s--) l.add(s);
-        l.add(36);
-        for (int s = 45; s <= 53; s++) l.add(s);
+        for (int s = 0; s <= 8; s++) l.add(s);          // bovenste rij →
+        l.add(17);                                      // bocht omlaag
+        for (int s = 16; s >= 9; s--) l.add(s);         // tweede rij ←
+        l.add(18);                                      // bocht omlaag
+        for (int s = 19; s <= 26; s++) l.add(s);        // derde rij →
+        l.add(35);                                      // bocht omlaag
+        for (int s = 34; s >= 27; s--) l.add(s);        // vierde rij ←
         return l.stream().mapToInt(Integer::intValue).toArray();
     }
 
@@ -670,7 +676,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                     lore));
         }
 
-        holder.inv.setItem(4, categoryIcon(p, cat, "gui.items-click-line"));
+        holder.inv.setItem(48, categoryIcon(p, cat, "gui.items-click-line"));
         holder.inv.setItem(BACK_SLOT, pane(Material.ARROW, line("gui.back"), null));
         return holder.inv;
     }
@@ -777,7 +783,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 ItemStack[] items = stash.remove(id);
                 switching.add(id);
                 Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
-            } else if (e.getRawSlot() == 4) {
+            } else if (e.getRawSlot() == 48) {
                 switchMenu(player, () -> buildItems(player, ph.category, 0));
             }
             return;
