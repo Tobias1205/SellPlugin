@@ -158,6 +158,14 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("sell") != null) getCommand("sell").setExecutor(this);
+        if (getCommand("worth") != null) getCommand("worth").setExecutor(this);
+
+        if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
+            new SellPlaceholderExpansion(this).register();
+            getLogger().info("PlaceholderAPI placeholders actief: %sell_balance%, %sell_balance_formatted%, %sell_balance_short%.");
+        } else {
+            getLogger().info("PlaceholderAPI niet gevonden; SellPlugin placeholders zijn uitgeschakeld.");
+        }
 
         setupWorthLore();
 
@@ -429,22 +437,33 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     // ------------------------------------------------------------------ prijzen
 
-    /** Prijs per stuk (zonder multiplier), of -1 als het item niet verkocht kan worden. */
+    /** Prijs per stuk (zonder multiplier), of -1 als het item geen geldige prijs heeft. */
     private double unitPrice(ItemStack item, boolean full) {
+        if (item == null || item.getType().isAir()) return -1;
+
         Material type = item.getType();
         if (type == Material.ENCHANTED_BOOK) return enchantedBookPrice(item);
         if (type == Material.POTION || type == Material.SPLASH_POTION || type == Material.LINGERING_POTION) {
             return potionPrice(item);
         }
-        Double base = prices.get(item.getType());
+
+        Double base = prices.get(type);
         if (base == null || base <= 0) return -1;
 
         double factor = 1.0;
+        double enchantBonus = 0.0;
         if (item.hasItemMeta()) {
             ItemMeta meta = item.getItemMeta();
-            if (meta.hasDisplayName() || meta.hasLore() || meta.hasEnchants()) return -1;
+            if (meta.hasDisplayName() || meta.hasLore()) return -1;
             if (meta instanceof PotionMeta || meta instanceof EnchantmentStorageMeta
                     || meta instanceof BookMeta || meta instanceof MapMeta || meta instanceof SkullMeta) return -1;
+
+            // Gewone enchants verhogen de waarde van elk enchantbaar item.
+            // De prijs is per enchantment en per level, net als bij enchanted books.
+            if (meta.hasEnchants()) {
+                enchantBonus = enchantmentBonus(meta.getEnchants());
+            }
+
             if (full) {
                 if (meta instanceof BundleMeta bm && bm.hasItems()) return -1;
                 if (meta instanceof BlockStateMeta bsm && bsm.hasBlockState()
@@ -455,7 +474,21 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 factor = Math.max(0.05, 1.0 - (double) d.getDamage() / max);
             }
         }
-        return base * priceScale * factor;
+
+        return (base + enchantBonus) * priceScale * factor;
+    }
+
+    private double enchantmentBonus(Map<Enchantment, Integer> enchants) {
+        if (enchants == null || enchants.isEmpty()) return 0.0;
+        double def = getConfig().getDouble("enchanted-books.default-per-level", 50);
+        double total = 0.0;
+        for (Map.Entry<Enchantment, Integer> e : enchants.entrySet()) {
+            if (e.getKey() == null) continue;
+            int level = Math.max(1, e.getValue());
+            String key = e.getKey().getKey().getKey().toLowerCase(Locale.ROOT);
+            total += enchantPrices.getOrDefault(key, def) * level;
+        }
+        return total;
     }
 
     private double enchantedBookPrice(ItemStack item) {
@@ -463,13 +496,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (esm.hasDisplayName() || esm.hasLore()) return -1;
         Map<Enchantment, Integer> stored = esm.getStoredEnchants();
         if (stored.isEmpty()) return -1;
-        double def = getConfig().getDouble("enchanted-books.default-per-level", 50);
-        double total = 0;
-        for (Map.Entry<Enchantment, Integer> e : stored.entrySet()) {
-            String key = e.getKey().getKey().getKey().toLowerCase(Locale.ROOT);
-            total += enchantPrices.getOrDefault(key, def) * e.getValue();
-        }
-        return total * priceScale;
+        return enchantmentBonus(stored) * priceScale;
     }
 
     private double potionPrice(ItemStack item) {
@@ -808,6 +835,37 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         }
     }
 
+    /** Basisprijs voor /worth wanneer de speler een materiaalnaam opgeeft. */
+    private double plainMaterialPrice(Material material) {
+        if (material == null || material.isAir()) return -1;
+        Double base = prices.get(material);
+        if (base == null || base <= 0) return -1;
+        return base * priceScale;
+    }
+
+    /** Totale Vault-balance, bedoeld voor PlaceholderAPI/TAB. */
+    public double getBalance(Player player) {
+        return economy == null ? 0.0 : economy.getBalance(player);
+    }
+
+    /**
+     * Verplaatsingen in inventories kunnen op Paper verschillende packet-routes gebruiken.
+     * Een updateInventory na de actie zorgt dat PacketEvents de Worth-regel opnieuw toevoegt.
+     */
+    @EventHandler
+    public void onAnyInventoryClick(InventoryClickEvent e) {
+        if (!(e.getWhoClicked() instanceof Player player)) return;
+        if (worthLore == null || !shouldShowLore(player.getUniqueId())) return;
+        Bukkit.getScheduler().runTask(this, player::updateInventory);
+    }
+
+    @EventHandler
+    public void onAnyInventoryDrag(InventoryDragEvent e) {
+        if (!(e.getWhoClicked() instanceof Player player)) return;
+        if (worthLore == null || !shouldShowLore(player.getUniqueId())) return;
+        Bukkit.getScheduler().runTask(this, player::updateInventory);
+    }
+
     // ------------------------------------------------------------------ command
 
     private Component msg(String key, String... replacements) {
@@ -819,6 +877,18 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
         String sub = args.length > 0 ? args[0].toLowerCase(Locale.ROOT) : "";
+        if (cmd.getName().equalsIgnoreCase("worth")) {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage("Alleen spelers kunnen dit gebruiken.");
+                return true;
+            }
+            if (!player.hasPermission("sell.worth")) { player.sendMessage(msg("no-permission")); return true; }
+            // /worth [item] [aantal] gebruikt exact dezelfde afhandeling als /sell worth.
+            String[] worthArgs = new String[args.length + 1];
+            worthArgs[0] = "worth";
+            System.arraycopy(args, 0, worthArgs, 1, args.length);
+            return onCommand(sender, getCommand("sell"), "sell", worthArgs);
+        }
 
         if (sub.equals("reload")) {
             if (!sender.hasPermission("sell.admin")) { sender.sendMessage(msg("no-permission")); return true; }
@@ -876,15 +946,49 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             return true;
         }
         if (sub.equals("worth")) {
-            ItemStack hand = player.getInventory().getItemInMainHand();
-            if (hand.getType().isAir()) { player.sendMessage(msg("hold-item")); return true; }
-            double unit = unitPrice(hand, true);
+            ItemStack target;
+            int amount;
+
+            if (args.length >= 2) {
+                String materialName = args[1].toUpperCase(Locale.ROOT).replace(' ', '_');
+                Material material = Material.matchMaterial(materialName);
+                if (material == null || material.isAir() || !material.isItem()) {
+                    player.sendMessage(MM.deserialize("<red>Onbekend item: <white>" + args[1]));
+                    return true;
+                }
+                amount = 1;
+                if (args.length >= 3) {
+                    try {
+                        amount = Math.max(1, Integer.parseInt(args[2]));
+                    } catch (NumberFormatException ex) {
+                        player.sendMessage(MM.deserialize("<red>Gebruik: /worth <item> [aantal]"));
+                        return true;
+                    }
+                }
+                target = new ItemStack(material, amount);
+                double unit = plainMaterialPrice(material);
+                if (unit < 0) {
+                    player.sendMessage(msg("not-sellable"));
+                    return true;
+                }
+                double mult = computeMultipliers(player)[categoryIndex(material)];
+                player.sendMessage(msg("worth-hand",
+                        "{item}", material.name().toLowerCase(Locale.ROOT).replace('_', ' '),
+                        "{multiplier}", fmt(mult),
+                        "{stack}", fmt(unit * mult * amount)));
+                return true;
+            }
+
+            target = player.getInventory().getItemInMainHand();
+            if (target.getType().isAir()) { player.sendMessage(msg("hold-item")); return true; }
+            amount = target.getAmount();
+            double unit = unitPrice(target, true);
             if (unit < 0) { player.sendMessage(msg("not-sellable")); return true; }
-            double mult = computeMultipliers(player)[categoryIndex(hand.getType())];
+            double mult = computeMultipliers(player)[categoryIndex(target.getType())];
             player.sendMessage(msg("worth-hand",
-                    "{item}", hand.getType().name().toLowerCase(Locale.ROOT).replace('_', ' '),
+                    "{item}", target.getType().name().toLowerCase(Locale.ROOT).replace('_', ' '),
                     "{multiplier}", fmt(mult),
-                    "{stack}", fmt(unit * mult * hand.getAmount())));
+                    "{stack}", fmt(unit * mult * amount)));
             return true;
         }
 

@@ -27,7 +27,7 @@ category-levels:
 # De 9 categorieen (onderste rij van /sell). Waar elk item bij hoort staat in categories.yml.
 # scale: 0.5 = drempels de helft lager (handig voor goedkope categorieen), 2 = dubbel zo hoog.
 # Kleur van alle categorie-namen (MiniMessage tag, bv. <yellow>, <gold>, <aqua>, <green>)
-category-color: "<yellow>"
+category-color: "<gray>"
 default-category: blocks
 categories:
   crops:
