@@ -206,6 +206,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (base.isEmpty()) base.add(new double[]{0, 1.0});
         base.sort(Comparator.comparingDouble(a -> a[0]));
 
+        String color = getConfig().getString("category-color", "<yellow>");
         List<Category> list = new ArrayList<>();
         ConfigurationSection cs = getConfig().getConfigurationSection("categories");
         if (cs != null) {
@@ -218,7 +219,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 double scale = Math.max(0.0001, c.getDouble("scale", 1.0));
                 List<double[]> lv = new ArrayList<>();
                 for (double[] b : base) lv.add(new double[]{(double) Math.round(b[0] * scale), b[1]});
-                list.add(new Category(key, c.getString("name", key), icon, lv));
+                list.add(new Category(key, color + MM.stripTags(c.getString("name", key)), icon, lv));
             }
         }
         if (list.isEmpty()) list.add(new Category("all", "<green>Alles", Material.CHEST, base));
@@ -526,9 +527,9 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         return unit * mult;
     }
 
-    Component loreLine(String key, double unit, double stack) {
-        String s = getConfig().getString("worth-lore." + key, "");
-        return MM.deserialize(s.replace("{price}", fmt(unit)).replace("{stack}", fmt(stack)));
+    Component loreLine(double total) {
+        String f = getConfig().getString("worth-lore.format", "<!italic><gray>Worth <green>${price}");
+        return MM.deserialize(f.replace("{price}", fmt(total)));
     }
 
     // ------------------------------------------------------------------ menu's
@@ -656,7 +657,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             if (e.getValue() <= 0 || categoryIndex(e.getKey()) != cat) continue;
             double price = e.getValue() * priceScale * mult;
             ItemStack it = new ItemStack(e.getKey());
-            it.editMeta(m -> m.lore(List.of(loreLine("each", price, price))));
+            it.editMeta(m -> m.lore(List.of(loreLine(price))));
             out.add(new Listed(it, price));
         }
 
@@ -668,7 +669,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 ItemStack it = new ItemStack(Material.ENCHANTED_BOOK);
                 it.editMeta(m -> {
                     if (m instanceof EnchantmentStorageMeta esm) esm.addStoredEnchant(ench, 1, true);
-                    m.lore(List.of(line("gui.worth-level", "{price}", fmt(price))));
+                    m.lore(List.of(loreLine(price)));
                 });
                 out.add(new Listed(it, price));
             }
@@ -681,7 +682,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 ItemStack it = new ItemStack(Material.POTION);
                 it.editMeta(m -> {
                     if (m instanceof PotionMeta pm) pm.setBasePotionType(type);
-                    m.lore(List.of(loreLine("each", price, price), line("gui.potion-note")));
+                    m.lore(List.of(loreLine(price), line("gui.potion-note")));
                 });
                 out.add(new Listed(it, price));
             }
@@ -880,9 +881,8 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             double unit = unitPrice(hand, true);
             if (unit < 0) { player.sendMessage(msg("not-sellable")); return true; }
             double mult = computeMultipliers(player)[categoryIndex(hand.getType())];
-            player.sendMessage(msg("worth",
+            player.sendMessage(msg("worth-hand",
                     "{item}", hand.getType().name().toLowerCase(Locale.ROOT).replace('_', ' '),
-                    "{price}", fmt(unit * mult),
                     "{multiplier}", fmt(mult),
                     "{stack}", fmt(unit * mult * hand.getAmount())));
             return true;

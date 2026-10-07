@@ -102,8 +102,7 @@ public class WorthLore extends PacketListenerAbstract {
         if (unit < 0) return null;
 
         List<Component> lore = new ArrayList<>();
-        lore.add(plugin.loreLine("each", unit, unit * item.getAmount()));
-        if (item.getAmount() > 1) lore.add(plugin.loreLine("stack", unit, unit * item.getAmount()));
+        lore.add(plugin.loreLine(unit * item.getAmount()));
         item.lore(lore);
         plugin.onLoreApplied();
         return SpigotConversionUtil.fromBukkitItemStack(item);

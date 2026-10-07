@@ -26,42 +26,44 @@ category-levels:
 
 # De 9 categorieen (onderste rij van /sell). Waar elk item bij hoort staat in categories.yml.
 # scale: 0.5 = drempels de helft lager (handig voor goedkope categorieen), 2 = dubbel zo hoog.
+# Kleur van alle categorie-namen (MiniMessage tag, bv. <yellow>, <gold>, <aqua>, <green>)
+category-color: "<yellow>"
 default-category: blocks
 categories:
   crops:
-    name: "<yellow>Crops"
+    name: "Crops"
     icon: WHEAT
     scale: 0.5
   ores:
-    name: "<aqua>Ores"
+    name: "Ores"
     icon: DIAMOND
     scale: 2.0
   mobs:
-    name: "<red>Mob Drops"
+    name: "Mob Drops"
     icon: BONE
     scale: 0.5
   natural:
-    name: "<green>Natural Items"
+    name: "Natural Items"
     icon: GRASS_BLOCK
     scale: 0.4
   tools:
-    name: "<blue>Armor & Tools"
+    name: "Armor & Tools"
     icon: SHIELD
     scale: 1.5
   fish:
-    name: "<dark_aqua>Fish"
+    name: "Fish"
     icon: COD
     scale: 0.5
   books:
-    name: "<light_purple>Enchanted Books"
+    name: "Enchanted Books"
     icon: ENCHANTED_BOOK
     scale: 2.0
   potions:
-    name: "<dark_purple>Potions"
+    name: "Potions"
     icon: BREWING_STAND
     scale: 1.0
   blocks:
-    name: "<gray>Blocks"
+    name: "Blocks"
     icon: BRICKS
     scale: 0.5
 
@@ -154,8 +156,7 @@ global-multiplier: 1.0
 # Toont de waarde in de tooltip van items in je inventory (heeft PacketEvents nodig)
 worth-lore:
   enabled: true
-  each: "<!italic><gray>Waarde: <green>${price}</green> <dark_gray>(per stuk)"
-  stack: "<!italic><gray>Stack: <green>${stack}"
+  format: "<!italic><gray>Worth <green>${price}"
 
 gui:
   sell-title: "<dark_gray>Sell"
@@ -186,7 +187,7 @@ messages:
   reloaded: "<green>Config en prijzen herladen."
   multipliers-header: "<green>Jouw multipliers <gray>(global x{global})"
   multiplier-line: "<gray>- {category}<gray>: <yellow>x{multiplier} <dark_gray>(level x{progress})"
-  worth: "<yellow>{item}</yellow> <gray>- <green>${price}</green> per stuk <gray>(x{multiplier}), stack: ${stack}"
+  worth-hand: "<yellow>{item}</yellow> <gray>- Worth <green>${stack}</green> <dark_gray>(x{multiplier})"
   not-sellable: "<red>Dit item kan niet verkocht worden."
   hold-item: "<red>Hou een item vast."
   global-set: "<green>Global multiplier staat nu op x{multiplier}."
