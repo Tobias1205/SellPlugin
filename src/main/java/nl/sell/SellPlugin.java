@@ -128,26 +128,27 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     private record Listed(ItemStack item, double price) { }
 
     /**
-     * Vaste W-vorm voor de multiplier-levels.
-     * De 20 levels (x1.1 t/m x3.0) staan direct achter elkaar in de route.
+     * Exacte multiplier-layout zoals gewenst:
+     *
+     * rij 1: leeg | CROP | leeg | leeg | leeg | x3.0 | leeg | leeg | leeg
+     * rij 2: leeg | x1.1 | leeg | x1.9 | x2.0 | x2.1 | leeg | x2.9 | leeg
+     * rij 3: leeg | x1.2 | leeg | x1.8 | leeg | x2.2 | leeg | x2.8 | leeg
+     * rij 4: leeg | x1.3 | leeg | x1.7 | leeg | x2.3 | leeg | x2.7 | leeg
+     * rij 5: leeg | x1.4 | x1.5 | x1.6 | leeg | x2.4 | x2.5 | x2.6 | leeg
+     * rij 6: terug-pijl links
+     *
+     * Alleen de genoemde slots bevatten multiplier-levels. Alle overige slots
+     * in de eerste vijf rijen krijgen een aparte achtergrondkleur, zodat het
+     * duidelijk is welke vakken geen knop zijn.
      */
     private static int[] buildPath() {
-        // W-vorm zoals in de GUI:
-        // rij 1: x1.1                x1.9 x2.0 x2.1                x2.9
-        // rij 2: x1.2                x1.8       x2.2                x2.8
-        // rij 3: x1.3                x1.7       x2.3                x2.7
-        // rij 4: x1.4 x1.5 x1.6                x2.4 x2.5 x2.6
-        // rij 5: x1.4 x1.5 x1.6                x2.4 x2.5 x2.6
-        // x3.0 staat als eindpunt rechtsboven.
-        // De tussenliggende cellen worden als rand/pane ingevuld; de levels
-        // zelf staan alleen op de W-punten.
         return new int[] {
-                9, 18, 27, 36, 37, 38,    // x1.1 - x1.6
-                30, 21, 12,                // x1.7 - x1.9
-                13, 14,                    // x2.0 - x2.1
-                23, 32, 41, 42, 43,        // x2.2 - x2.6
-                35, 26, 17,                // x2.7 - x2.9
-                8                          // x3.0
+                10, 19, 28, 37, 38, 39, // x1.1 - x1.6
+                30, 21, 12,             // x1.7 - x1.9
+                13, 14,                 // x2.0 - x2.1
+                23, 32, 41, 42, 43,     // x2.2 - x2.6
+                34, 25, 16,             // x2.7 - x2.9
+                5                       // x3.0
         };
     }
 
@@ -659,34 +660,41 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         List<double[]> lv = c.levels();
         int[] levelSlots = PATH;
 
-        // De W krijgt een duidelijke rand: alle slots van de eerste vijf rijen
-        // worden eerst gevuld met grijze panes. De multiplier-slots vervangen
-        // daarna precies de juiste randpunten. Zo blijven de open vakken tussen
-        // de twee helften van de W zichtbaar.
+        // Achtergrond: zwart glas = niet-klikbaar/leeg vak.
+        // Hierdoor zijn de echte multiplier-slots duidelijk herkenbaar.
         for (int row = 0; row < 5; row++) {
             for (int col = 0; col < 9; col++) {
                 holder.inv.setItem(row * 9 + col,
-                        pane(Material.GRAY_STAINED_GLASS_PANE, Component.text(" "), null));
+                        pane(Material.BLACK_STAINED_GLASS_PANE, Component.text(" "), null));
             }
         }
 
-        // x1.1 t/m x3.0 op de W-punten.
+        // Het categorie-icoon staat altijd bovenaan op slot 1. Dit is de knop
+        // om alle items van deze categorie te bekijken.
+        holder.inv.setItem(1, categoryIcon(p, cat, "gui.items-click-line"));
+
+        // Multiplier-levels exact op de gevraagde W-posities.
         for (int i = 0; i < Math.min(lv.size(), levelSlots.length); i++) {
             double[] l = lv.get(i);
             boolean reached = sold >= l[0];
             String mult = fmt(Math.min(l[1], cap));
             List<Component> lore = new ArrayList<>();
             lore.add(line("gui.level-from", "{needed}", fmt(l[0])));
-            if (!reached) lore.add(line("gui.level-remaining", "{remaining}", fmt(l[0] - sold)));
+            if (!reached) {
+                lore.add(line("gui.level-remaining", "{remaining}", fmt(l[0] - sold)));
+            }
+
+            // Groen = bereikt, rood = nog niet bereikt. Beide zijn bewust
+            // niet-klikbaar; alleen het categorie-icoon en de terugknop zijn
+            // navigatieknoppen.
             holder.inv.setItem(levelSlots[i], pane(
-                    reached ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE,
+                    reached ? Material.LIME_STAINED_GLASS_PANE : Material.RED_STAINED_GLASS_PANE,
                     line(reached ? "gui.level-reached" : "gui.level-locked", "{multiplier}", mult),
                     lore));
         }
 
-        // Onderste rij: terug naar /sell links, categorie in het midden.
+        // Onderste rij: alleen de terugknop links.
         holder.inv.setItem(45, pane(Material.ARROW, line("gui.back-overview"), null));
-        holder.inv.setItem(49, categoryIcon(p, cat, "gui.items-click-line"));
         return holder.inv;
     }
 
