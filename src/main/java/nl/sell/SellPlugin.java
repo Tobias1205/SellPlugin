@@ -179,6 +179,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (getCommand("worth") != null) getCommand("worth").setExecutor(this);
 
         setupWorthLore();
+        SellPlaceholderExpansion.tryRegister(this);
 
         for (Player p : Bukkit.getOnlinePlayers()) refreshPlayer(p);
         getServer().getScheduler().runTaskTimer(this, this::refreshAll, 200L, 600L);
@@ -588,6 +589,23 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     Component loreLine(double total) {
         String f = getConfig().getString("worth-lore.format", "<!italic><gray>Worth <green>${price}");
         return MM.deserialize(f.replace("{price}", fmt(total)));
+    }
+
+    /** Voor PlaceholderAPI: multiplier_<categorie> en sold_<categorie>. */
+    String placeholder(Player p, String params) {
+        if (p == null) return "";
+        String key = params.toLowerCase(Locale.ROOT);
+        int us = key.indexOf('_');
+        if (us < 0) return null;
+        String type = key.substring(0, us);
+        String cat = key.substring(us + 1);
+        List<Category> cats = categories;
+        for (int i = 0; i < cats.size(); i++) {
+            if (!cats.get(i).id().equals(cat)) continue;
+            if (type.equals("multiplier")) return fmt(computeMultipliers(p)[i]);
+            if (type.equals("sold")) return fmt(soldOf(p.getUniqueId())[i]);
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------ menu's

@@ -1,9 +1,9 @@
 name: SellPlugin
-version: 1.7.0
+version: 1.7.1
 main: nl.sell.SellPlugin
 api-version: '1.21'
 depend: [Vault]
-softdepend: [packetevents]
+softdepend: [packetevents, PlaceholderAPI]
 commands:
   sell:
     description: Open het verkoopmenu
