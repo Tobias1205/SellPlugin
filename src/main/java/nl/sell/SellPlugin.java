@@ -24,7 +24,13 @@ import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityPickupItemEvent;
+import org.bukkit.event.inventory.InventoryCreativeEvent;
+import org.bukkit.event.player.PlayerItemConsumeEvent;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerGameModeChangeEvent;
+import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -63,7 +69,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     /** Slots 0-44 zijn voor items, de onderste rij (45-53) voor de categorie-iconen. */
     private static final int ITEM_SLOTS = 45;
-    private static final int BACK_SLOT = 45;
+    private static final int BACK_SLOT = 0;
     private static final int[] PATH = buildPath();
 
     /** Items die nooit verkocht kunnen worden (niet verkrijgbaar of met data). */
@@ -117,39 +123,37 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         private final int category;
         private final int page;
         private final boolean hasNext;
-        ItemsHolder(int category, int page, boolean hasNext) {
+        private final boolean worthMode;
+        private final String query;   // alleen bij zoeken via /worth <zoekterm>
+        ItemsHolder(int category, int page, boolean hasNext, boolean worthMode) {
+            this(category, page, hasNext, worthMode, null);
+        }
+        ItemsHolder(int category, int page, boolean hasNext, boolean worthMode, String query) {
             this.category = category;
             this.page = page;
             this.hasNext = hasNext;
+            this.worthMode = worthMode;
+            this.query = query;
         }
+        @Override public @NotNull Inventory getInventory() { return inv; }
+    }
+
+    private static class WorthHolder implements InventoryHolder {
+        private Inventory inv;
         @Override public @NotNull Inventory getInventory() { return inv; }
     }
 
     private record Listed(ItemStack item, double price) { }
 
-    /**
-     * Exacte multiplier-layout zoals gewenst:
-     *
-     * rij 1: leeg | CROP | leeg | leeg | leeg | x3.0 | leeg | leeg | leeg
-     * rij 2: leeg | x1.1 | leeg | x1.9 | x2.0 | x2.1 | leeg | x2.9 | leeg
-     * rij 3: leeg | x1.2 | leeg | x1.8 | leeg | x2.2 | leeg | x2.8 | leeg
-     * rij 4: leeg | x1.3 | leeg | x1.7 | leeg | x2.3 | leeg | x2.7 | leeg
-     * rij 5: leeg | x1.4 | x1.5 | x1.6 | leeg | x2.4 | x2.5 | x2.6 | leeg
-     * rij 6: terug-pijl links
-     *
-     * Alleen de genoemde slots bevatten multiplier-levels. Alle overige slots
-     * in de eerste vijf rijen krijgen een aparte achtergrondkleur, zodat het
-     * duidelijk is welke vakken geen knop zijn.
-     */
+    /** De "kronkel": rij 1 naar rechts, bocht, rij 3 naar links, bocht, rij 5 naar rechts. */
     private static int[] buildPath() {
-        return new int[] {
-                10, 19, 28, 37, 38, 39, // x1.1 - x1.6
-                30, 21, 12,             // x1.7 - x1.9
-                13, 14,                 // x2.0 - x2.1
-                23, 32, 41, 42, 43,     // x2.2 - x2.6
-                34, 25, 16,             // x2.7 - x2.9
-                5                       // x3.0
-        };
+        List<Integer> l = new ArrayList<>();
+        for (int s = 9; s <= 17; s++) l.add(s);
+        l.add(26);
+        for (int s = 35; s >= 27; s--) l.add(s);
+        l.add(36);
+        for (int s = 45; s <= 53; s++) l.add(s);
+        return l.stream().mapToInt(Integer::intValue).toArray();
     }
 
     // ------------------------------------------------------------------ start / stop
@@ -173,13 +177,6 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("sell") != null) getCommand("sell").setExecutor(this);
         if (getCommand("worth") != null) getCommand("worth").setExecutor(this);
-
-        if (getServer().getPluginManager().isPluginEnabled("PlaceholderAPI")) {
-            new SellPlaceholderExpansion(this).register();
-            getLogger().info("PlaceholderAPI placeholders actief: %sell_balance%, %sell_balance_formatted%, %sell_balance_short%.");
-        } else {
-            getLogger().info("PlaceholderAPI niet gevonden; SellPlugin placeholders zijn uitgeschakeld.");
-        }
 
         setupWorthLore();
 
@@ -228,7 +225,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (base.isEmpty()) base.add(new double[]{0, 1.0});
         base.sort(Comparator.comparingDouble(a -> a[0]));
 
-        String color = getConfig().getString("category-color", "<yellow>");
+        String color = getConfig().getString("category-name-color", "<gray>");
         List<Category> list = new ArrayList<>();
         ConfigurationSection cs = getConfig().getConfigurationSection("categories");
         if (cs != null) {
@@ -443,41 +440,69 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     }
 
     @EventHandler
+    public void onDropItem(PlayerDropItemEvent e) { resyncInventory(e.getPlayer().getUniqueId()); }
+
+    @EventHandler
+    public void onPickup(EntityPickupItemEvent e) {
+        if (e.getEntity() instanceof Player p) resyncInventory(p.getUniqueId());
+    }
+
+    @EventHandler
+    public void onSwap(PlayerSwapHandItemsEvent e) { resyncInventory(e.getPlayer().getUniqueId()); }
+
+    @EventHandler
+    public void onPlace(BlockPlaceEvent e) { resyncInventory(e.getPlayer().getUniqueId()); }
+
+    @EventHandler
+    public void onConsume(PlayerItemConsumeEvent e) { resyncInventory(e.getPlayer().getUniqueId()); }
+
+    @EventHandler
     public void onGameMode(PlayerGameModeChangeEvent e) {
-        UUID id = e.getPlayer().getUniqueId();
+        Player p = e.getPlayer();
+        UUID id = p.getUniqueId();
         if (e.getNewGameMode() == GameMode.CREATIVE) creative.add(id);
         else creative.remove(id);
+        // na de wissel het inventory opnieuw sturen: in creative zonder tooltip, daarbuiten met tooltip
+        Bukkit.getScheduler().runTaskLater(this, () -> { if (p.isOnline()) p.updateInventory(); }, 2L);
+    }
+
+    /** Creative-spelers sturen items terug naar de server: haal onze tooltip er dan weer af zodat hij nooit in een item blijft hangen. */
+    @EventHandler
+    public void onCreativeSet(InventoryCreativeEvent e) {
+        ItemStack cursor = e.getCursor();
+        if (cursor == null || cursor.getType().isAir() || !cursor.hasItemMeta()) return;
+        ItemMeta meta = cursor.getItemMeta();
+        if (!meta.hasLore() || meta.lore() == null || meta.lore().isEmpty()) return;
+        String format = MM.stripTags(getConfig().getString("worth-lore.format", "Worth ${price}"));
+        int idx = format.indexOf("{price}");
+        String prefix = idx >= 0 ? format.substring(0, idx) : format;
+        String first = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                .serialize(meta.lore().get(0));
+        if (!prefix.isBlank() && first.startsWith(prefix)) {
+            ItemStack clean = cursor.clone();
+            clean.lore(null);
+            e.setCursor(clean);
+        }
     }
 
     // ------------------------------------------------------------------ prijzen
 
-    /** Prijs per stuk (zonder multiplier), of -1 als het item geen geldige prijs heeft. */
+    /** Prijs per stuk (zonder multiplier), of -1 als het item niet verkocht kan worden. */
     private double unitPrice(ItemStack item, boolean full) {
-        if (item == null || item.getType().isAir()) return -1;
-
         Material type = item.getType();
         if (type == Material.ENCHANTED_BOOK) return enchantedBookPrice(item);
         if (type == Material.POTION || type == Material.SPLASH_POTION || type == Material.LINGERING_POTION) {
             return potionPrice(item);
         }
-
-        Double base = prices.get(type);
+        Double base = prices.get(item.getType());
         if (base == null || base <= 0) return -1;
 
         double factor = 1.0;
-        double enchantBonus = 0.0;
         if (item.hasItemMeta()) {
             ItemMeta meta = item.getItemMeta();
-            if (meta.hasDisplayName() || meta.hasLore()) return -1;
+            if (meta.hasDisplayName() || meta.hasLore() || meta.hasEnchants()) return -1;
             if (meta instanceof PotionMeta || meta instanceof EnchantmentStorageMeta
                     || meta instanceof BookMeta || meta instanceof MapMeta || meta instanceof SkullMeta) return -1;
-
-            // Gewone enchants verhogen de waarde van elk enchantbaar item.
-            // De prijs is per enchantment en per level, net als bij enchanted books.
-            if (meta.hasEnchants()) {
-                enchantBonus = enchantmentBonus(meta.getEnchants());
-            }
-
             if (full) {
                 if (meta instanceof BundleMeta bm && bm.hasItems()) return -1;
                 if (meta instanceof BlockStateMeta bsm && bsm.hasBlockState()
@@ -488,21 +513,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 factor = Math.max(0.05, 1.0 - (double) d.getDamage() / max);
             }
         }
-
-        return (base + enchantBonus) * priceScale * factor;
-    }
-
-    private double enchantmentBonus(Map<Enchantment, Integer> enchants) {
-        if (enchants == null || enchants.isEmpty()) return 0.0;
-        double def = getConfig().getDouble("enchanted-books.default-per-level", 50);
-        double total = 0.0;
-        for (Map.Entry<Enchantment, Integer> e : enchants.entrySet()) {
-            if (e.getKey() == null) continue;
-            int level = Math.max(1, e.getValue());
-            String key = e.getKey().getKey().getKey().toLowerCase(Locale.ROOT);
-            total += enchantPrices.getOrDefault(key, def) * level;
-        }
-        return total;
+        return base * priceScale * factor;
     }
 
     private double enchantedBookPrice(ItemStack item) {
@@ -510,7 +521,13 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         if (esm.hasDisplayName() || esm.hasLore()) return -1;
         Map<Enchantment, Integer> stored = esm.getStoredEnchants();
         if (stored.isEmpty()) return -1;
-        return enchantmentBonus(stored) * priceScale;
+        double def = getConfig().getDouble("enchanted-books.default-per-level", 50);
+        double total = 0;
+        for (Map.Entry<Enchantment, Integer> e : stored.entrySet()) {
+            String key = e.getKey().getKey().getKey().toLowerCase(Locale.ROOT);
+            total += enchantPrices.getOrDefault(key, def) * e.getValue();
+        }
+        return total * priceScale;
     }
 
     private double potionPrice(ItemStack item) {
@@ -658,52 +675,34 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         double sold = soldOf(p.getUniqueId())[cat];
         double cap = getConfig().getDouble("max-multiplier", 3.0);
         List<double[]> lv = c.levels();
-        int[] levelSlots = PATH;
+        int cells = PATH.length;
 
-        // Achtergrond: zwart glas = niet-klikbaar/leeg vak.
-        // Hierdoor zijn de echte multiplier-slots duidelijk herkenbaar.
-        for (int row = 0; row < 5; row++) {
-            for (int col = 0; col < 9; col++) {
-                holder.inv.setItem(row * 9 + col,
-                        pane(Material.BLACK_STAINED_GLASS_PANE, Component.text(" "), null));
-            }
+        int reachedLevel = -1;
+        for (int i = 0; i < lv.size(); i++) if (sold >= lv.get(i)[0]) reachedLevel = i;
+        int reachedCell = reachedLevel < 0 ? -1 : cellOf(reachedLevel, lv.size(), cells);
+
+        // de kronkel zelf: groen tot waar je bent, grijs daarna
+        for (int cell = 0; cell < cells; cell++) {
+            Material mat = cell <= reachedCell ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE;
+            holder.inv.setItem(PATH[cell], pane(mat, Component.text(" "), null));
         }
 
-        // Het categorie-icoon staat bovenaan op slot 1. Dit is de ENIGE
-        // knop in het W-gedeelte om alle verkoopbare items van deze categorie
-        // te bekijken. De multiplier-vakjes zelf zijn bewust niet-klikbaar.
-        holder.inv.setItem(1, categoryIcon(p, cat, "gui.items-click-line"));
-
-        // Multiplier-levels exact op de gevraagde W-posities.
-        // Level 0 (x1.0) is de basis-multiplier en wordt niet als level in
-        // de GUI getoond. Daardoor lopen de zichtbare levels netjes van
-        // x1.1 t/m x3.0 over alle 20 W-slots.
-        for (int i = 1; i < lv.size() && (i - 1) < levelSlots.length; i++) {
+        // de levels zelf op de kronkel
+        for (int i = 0; i < lv.size(); i++) {
             double[] l = lv.get(i);
             boolean reached = sold >= l[0];
             String mult = fmt(Math.min(l[1], cap));
             List<Component> lore = new ArrayList<>();
             lore.add(line("gui.level-from", "{needed}", fmt(l[0])));
-            if (!reached) {
-                lore.add(line("gui.level-remaining", "{remaining}", fmt(l[0] - sold)));
-            }
-
-            // Groen = bereikt, rood = nog niet bereikt. Beide zijn bewust
-            // niet-klikbaar; alleen het categorie-icoon en de terugknop zijn
-            // navigatieknoppen.
-            holder.inv.setItem(levelSlots[i], pane(
-                    reached ? Material.LIME_STAINED_GLASS_PANE : Material.RED_STAINED_GLASS_PANE,
+            if (!reached) lore.add(line("gui.level-remaining", "{remaining}", fmt(l[0] - sold)));
+            holder.inv.setItem(PATH[cellOf(i, lv.size(), cells)], pane(
+                    reached ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE,
                     line(reached ? "gui.level-reached" : "gui.level-locked", "{multiplier}", mult),
                     lore));
         }
 
-        // Onderste rij: donkere glasrand, met alleen de terugknop links.
-        // Zo blijft de hele onderste rij netjes gevuld.
-        for (int col = 0; col < 9; col++) {
-            holder.inv.setItem(45 + col,
-                    pane(Material.BLACK_STAINED_GLASS_PANE, Component.text(" "), null));
-        }
-        holder.inv.setItem(45, pane(Material.ARROW, line("gui.back-overview"), null));
+        holder.inv.setItem(4, categoryIcon(p, cat, "gui.items-click-line"));
+        holder.inv.setItem(BACK_SLOT, pane(Material.ARROW, line("gui.back"), null));
         return holder.inv;
     }
 
@@ -712,20 +711,10 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         String id = categories.get(cat).id();
         List<Listed> out = new ArrayList<>();
 
-        // Gebruik de categorie-indeling als bron van waarheid. Hierdoor blijven
-        // ALLE items uit categories.yml zichtbaar, ook wanneer een item nog niet
-        // handmatig in prices.yml stond. loadPrices() heeft daarvoor al een
-        // fallback-prijs aangemaakt.
-        Set<Material> categoryMaterials = EnumSet.noneOf(Material.class);
-        for (Map.Entry<Material, Integer> e : categoryOf.entrySet()) {
-            if (e.getValue() == cat && isSellableType(e.getKey())) categoryMaterials.add(e.getKey());
-        }
-
-        for (Material material : categoryMaterials) {
-            double base = prices.getOrDefault(material, getConfig().getDouble("fallback-price", 1.0));
-            if (base <= 0) continue;
-            double price = base * priceScale * mult;
-            ItemStack it = new ItemStack(material);
+        for (Map.Entry<Material, Double> e : prices.entrySet()) {
+            if (e.getValue() <= 0 || categoryIndex(e.getKey()) != cat) continue;
+            double price = e.getValue() * priceScale * mult;
+            ItemStack it = new ItemStack(e.getKey());
             it.editMeta(m -> m.lore(List.of(loreLine(price))));
             out.add(new Listed(it, price));
         }
@@ -762,12 +751,12 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         return out;
     }
 
-    private Inventory buildItems(Player p, int cat, int requestedPage) {
+    private Inventory buildItems(Player p, int cat, int requestedPage, boolean worthMode) {
         List<Listed> all = categoryItems(p, cat);
         int pages = Math.max(1, (all.size() + ITEM_SLOTS - 1) / ITEM_SLOTS);
         int page = Math.max(0, Math.min(requestedPage, pages - 1));
 
-        ItemsHolder holder = new ItemsHolder(cat, page, page < pages - 1);
+        ItemsHolder holder = new ItemsHolder(cat, page, page < pages - 1, worthMode);
         String title = str("gui.items-title")
                 .replace("{category}", categories.get(cat).name())
                 .replace("{page}", String.valueOf(page + 1))
@@ -778,14 +767,54 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             int idx = page * ITEM_SLOTS + i;
             if (idx < all.size()) holder.inv.setItem(i, all.get(idx).item());
         }
-        // Onderste rij van het item-menu: terug | vorige | categorie | volgende.
-        // Slot 45 = terug naar /sell, 48 = vorige pagina, 49 = categorie/W, 50 = volgende pagina.
-        holder.inv.setItem(45, pane(Material.ARROW, line("gui.back-overview"), null));
-        if (page > 0) holder.inv.setItem(48, pane(Material.ARROW, line("gui.prev"), null));
+        if (page > 0) holder.inv.setItem(45, pane(Material.ARROW, line("gui.prev"), null));
         holder.inv.setItem(49, pane(Material.ARROW, line("gui.back-overview"), null));
-        if (holder.hasNext) holder.inv.setItem(50, pane(Material.ARROW, line("gui.next"), null));
-        for (int slot : new int[]{46, 47, 51, 52, 53}) {
-            holder.inv.setItem(slot, pane(Material.BLACK_STAINED_GLASS_PANE, Component.text(" "), null));
+        if (holder.hasNext) holder.inv.setItem(53, pane(Material.ARROW, line("gui.next"), null));
+        return holder.inv;
+    }
+
+    private List<Listed> searchItems(Player p, String query) {
+        List<Listed> out = new ArrayList<>();
+        for (int c = 0; c < categories.size(); c++) {
+            for (Listed l : categoryItems(p, c)) {
+                if (l.item().getType().name().toLowerCase(Locale.ROOT).contains(query)) out.add(l);
+            }
+        }
+        out.sort(Comparator.comparing((Listed l) -> l.item().getType().name()).thenComparingDouble(Listed::price));
+        return out;
+    }
+
+    private Inventory buildSearch(Player p, String query, int requestedPage) {
+        List<Listed> all = searchItems(p, query);
+        int pages = Math.max(1, (all.size() + ITEM_SLOTS - 1) / ITEM_SLOTS);
+        int page = Math.max(0, Math.min(requestedPage, pages - 1));
+
+        ItemsHolder holder = new ItemsHolder(-1, page, page < pages - 1, true, query);
+        String title = str("gui.search-title")
+                .replace("{query}", query.replace('_', ' '))
+                .replace("{page}", String.valueOf(page + 1))
+                .replace("{pages}", String.valueOf(pages));
+        holder.inv = Bukkit.createInventory(holder, 54, MM.deserialize(title));
+        for (int i = 0; i < ITEM_SLOTS; i++) {
+            int idx = page * ITEM_SLOTS + i;
+            if (idx < all.size()) holder.inv.setItem(i, all.get(idx).item());
+        }
+        if (page > 0) holder.inv.setItem(45, pane(Material.ARROW, line("gui.prev"), null));
+        holder.inv.setItem(49, pane(Material.ARROW, line("gui.close"), null));
+        if (holder.hasNext) holder.inv.setItem(53, pane(Material.ARROW, line("gui.next"), null));
+        return holder.inv;
+    }
+
+    private Inventory rebuild(Player p, ItemsHolder ih, int page) {
+        return ih.query != null ? buildSearch(p, ih.query, page) : buildItems(p, ih.category, page, ih.worthMode);
+    }
+
+    /** Hoofdmenu van /worth: kies een categorie om alle prijzen te zien. */
+    private Inventory buildWorthHome(Player p) {
+        WorthHolder holder = new WorthHolder();
+        holder.inv = Bukkit.createInventory(holder, 27, MM.deserialize(str("gui.worth-title")));
+        for (int i = 0; i < categories.size() && i < 9; i++) {
+            holder.inv.setItem(9 + i, categoryIcon(p, i, "gui.items-click-line"));
         }
         return holder.inv;
     }
@@ -814,6 +843,7 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
     @EventHandler
     public void onClick(InventoryClickEvent e) {
         if (!(e.getWhoClicked() instanceof Player player)) return;
+        resyncInventory(player.getUniqueId());   // tooltips kloppend houden na verplaatsen/splitsen
         Inventory top = e.getView().getTopInventory();
         InventoryHolder holder = top.getHolder();
 
@@ -825,9 +855,18 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 ItemStack[] items = stash.remove(id);
                 switching.add(id);
                 Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
-            } else if (e.getRawSlot() == 1) {
-                // Categorie-icoon: toon ALLE verkoopbare items van deze categorie.
-                switchMenu(player, () -> buildItems(player, ph.category, 0));
+            } else if (e.getRawSlot() == 4) {
+                switchMenu(player, () -> buildItems(player, ph.category, 0, false));
+            }
+            return;
+        }
+
+        if (holder instanceof WorthHolder) {
+            e.setCancelled(true);
+            if (e.getClickedInventory() != top) return;
+            int cat = e.getRawSlot() - 9;
+            if (cat >= 0 && cat < categories.size() && cat < 9) {
+                switchMenu(player, () -> buildItems(player, cat, 0, true));
             }
             return;
         }
@@ -836,17 +875,13 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             e.setCancelled(true);
             if (e.getClickedInventory() != top) return;
             int raw = e.getRawSlot();
-            if (raw == 45) {
-                UUID id = player.getUniqueId();
-                ItemStack[] items = stash.remove(id);
-                switching.add(id);
-                Bukkit.getScheduler().runTask(this, () -> openSell(player, items));
-            } else if (raw == 48 && ih.page > 0) {
-                switchMenu(player, () -> buildItems(player, ih.category, ih.page - 1));
-            } else if (raw == 50 && ih.hasNext) {
-                switchMenu(player, () -> buildItems(player, ih.category, ih.page + 1));
+            if (raw == 45 && ih.page > 0) {
+                switchMenu(player, () -> rebuild(player, ih, ih.page - 1));
+            } else if (raw == 53 && ih.hasNext) {
+                switchMenu(player, () -> rebuild(player, ih, ih.page + 1));
             } else if (raw == 49) {
-                switchMenu(player, () -> buildProgress(player, ih.category));
+                if (ih.query != null) Bukkit.getScheduler().runTask(this, player::closeInventory);
+                else switchMenu(player, () -> ih.worthMode ? buildWorthHome(player) : buildProgress(player, ih.category));
             }
             return;
         }
@@ -875,9 +910,10 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     @EventHandler
     public void onDrag(InventoryDragEvent e) {
+        if (e.getWhoClicked() instanceof Player dragger) resyncInventory(dragger.getUniqueId());
         Inventory top = e.getView().getTopInventory();
         InventoryHolder holder = top.getHolder();
-        if (holder instanceof ProgressHolder || holder instanceof ItemsHolder) {
+        if (holder instanceof ProgressHolder || holder instanceof ItemsHolder || holder instanceof WorthHolder) {
             e.setCancelled(true);
         } else if (holder instanceof SellHolder) {
             for (int raw : e.getRawSlots()) {
@@ -887,37 +923,6 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
                 }
             }
         }
-    }
-
-    /** Basisprijs voor /worth wanneer de speler een materiaalnaam opgeeft. */
-    private double plainMaterialPrice(Material material) {
-        if (material == null || material.isAir()) return -1;
-        Double base = prices.get(material);
-        if (base == null || base <= 0) return -1;
-        return base * priceScale;
-    }
-
-    /** Totale Vault-balance, bedoeld voor PlaceholderAPI/TAB. */
-    public double getBalance(Player player) {
-        return economy == null ? 0.0 : economy.getBalance(player);
-    }
-
-    /**
-     * Verplaatsingen in inventories kunnen op Paper verschillende packet-routes gebruiken.
-     * Een updateInventory na de actie zorgt dat PacketEvents de Worth-regel opnieuw toevoegt.
-     */
-    @EventHandler
-    public void onAnyInventoryClick(InventoryClickEvent e) {
-        if (!(e.getWhoClicked() instanceof Player player)) return;
-        if (worthLore == null || !shouldShowLore(player.getUniqueId())) return;
-        Bukkit.getScheduler().runTask(this, player::updateInventory);
-    }
-
-    @EventHandler
-    public void onAnyInventoryDrag(InventoryDragEvent e) {
-        if (!(e.getWhoClicked() instanceof Player player)) return;
-        if (worthLore == null || !shouldShowLore(player.getUniqueId())) return;
-        Bukkit.getScheduler().runTask(this, player::updateInventory);
     }
 
     // ------------------------------------------------------------------ command
@@ -930,19 +935,9 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
+        if (cmd.getName().equalsIgnoreCase("worth")) return handleWorth(sender, args);
         String sub = args.length > 0 ? args[0].toLowerCase(Locale.ROOT) : "";
-        if (cmd.getName().equalsIgnoreCase("worth")) {
-            if (!(sender instanceof Player player)) {
-                sender.sendMessage("Alleen spelers kunnen dit gebruiken.");
-                return true;
-            }
-            if (!player.hasPermission("sell.worth")) { player.sendMessage(msg("no-permission")); return true; }
-            // /worth [item] [aantal] gebruikt exact dezelfde afhandeling als /sell worth.
-            String[] worthArgs = new String[args.length + 1];
-            worthArgs[0] = "worth";
-            System.arraycopy(args, 0, worthArgs, 1, args.length);
-            return onCommand(sender, getCommand("sell"), "sell", worthArgs);
-        }
+        if (sub.equals("worth")) return handleWorth(sender, Arrays.copyOfRange(args, 1, args.length));
 
         if (sub.equals("reload")) {
             if (!sender.hasPermission("sell.admin")) { sender.sendMessage(msg("no-permission")); return true; }
@@ -999,59 +994,104 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
             }
             return true;
         }
-        if (sub.equals("worth")) {
-            ItemStack target;
-            int amount;
-
-            if (args.length >= 2) {
-                String materialName = args[1].toUpperCase(Locale.ROOT).replace(' ', '_');
-                Material material = Material.matchMaterial(materialName);
-                if (material == null || material.isAir() || !material.isItem()) {
-                    player.sendMessage(MM.deserialize("<red>Onbekend item: <white>" + args[1]));
-                    return true;
-                }
-                amount = 1;
-                if (args.length >= 3) {
-                    try {
-                        amount = Math.max(1, Integer.parseInt(args[2]));
-                    } catch (NumberFormatException ex) {
-                        player.sendMessage(MM.deserialize("<red>Gebruik: /worth <item> [aantal]"));
-                        return true;
-                    }
-                }
-                target = new ItemStack(material, amount);
-                double unit = plainMaterialPrice(material);
-                if (unit < 0) {
-                    player.sendMessage(msg("not-sellable"));
-                    return true;
-                }
-                double mult = computeMultipliers(player)[categoryIndex(material)];
-                player.sendMessage(msg("worth-hand",
-                        "{item}", material.name().toLowerCase(Locale.ROOT).replace('_', ' '),
-                        "{multiplier}", fmt(mult),
-                        "{stack}", fmt(unit * mult * amount)));
-                return true;
-            }
-
-            target = player.getInventory().getItemInMainHand();
-            if (target.getType().isAir()) { player.sendMessage(msg("hold-item")); return true; }
-            amount = target.getAmount();
-            double unit = unitPrice(target, true);
-            if (unit < 0) { player.sendMessage(msg("not-sellable")); return true; }
-            double mult = computeMultipliers(player)[categoryIndex(target.getType())];
-            player.sendMessage(msg("worth-hand",
-                    "{item}", target.getType().name().toLowerCase(Locale.ROOT).replace('_', ' '),
-                    "{multiplier}", fmt(mult),
-                    "{stack}", fmt(unit * mult * amount)));
-            return true;
-        }
 
         openSell(player, null);
         return true;
     }
 
+    // ------------------------------------------------------------------ /worth
+
+    private boolean isSpecialPriced(Material m) {
+        return m == Material.ENCHANTED_BOOK || m == Material.POTION
+                || m == Material.SPLASH_POTION || m == Material.LINGERING_POTION;
+    }
+
+    private boolean handleWorth(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("sell.worth")) { sender.sendMessage(msg("no-permission")); return true; }
+
+        if (args.length == 0) {
+            if (sender instanceof Player p) {
+                p.openInventory(buildWorthHome(p));
+            } else {
+                sender.sendMessage("Gebruik: /worth <item>");
+            }
+            return true;
+        }
+
+        Player player = sender instanceof Player pl ? pl : null;
+
+        if (args[0].equalsIgnoreCase("hand")) {
+            if (player == null) { sender.sendMessage("Alleen spelers kunnen dit gebruiken."); return true; }
+            ItemStack hand = player.getInventory().getItemInMainHand();
+            if (hand.getType().isAir()) { player.sendMessage(msg("hold-item")); return true; }
+            double unit = unitPrice(hand, true);
+            if (unit < 0) { player.sendMessage(msg("not-sellable")); return true; }
+            double mult = computeMultipliers(player)[categoryIndex(hand.getType())];
+            player.sendMessage(msg("worth-hand",
+                    "{item}", hand.getType().name().toLowerCase(Locale.ROOT).replace('_', ' '),
+                    "{multiplier}", fmt(mult),
+                    "{stack}", fmt(unit * mult * hand.getAmount())));
+            return true;
+        }
+
+        String query = String.join("_", args).toLowerCase(Locale.ROOT);
+        List<Material> found = new ArrayList<>();
+        Material exact = Material.getMaterial(query.toUpperCase(Locale.ROOT));
+        if (exact != null && (prices.containsKey(exact) || isSpecialPriced(exact))) {
+            found.add(exact);
+        } else {
+            List<Material> all = new ArrayList<>(prices.keySet());
+            all.addAll(List.of(Material.ENCHANTED_BOOK, Material.POTION, Material.SPLASH_POTION, Material.LINGERING_POTION));
+            for (Material m : all) if (m.name().toLowerCase(Locale.ROOT).contains(query)) found.add(m);
+        }
+
+        if (found.isEmpty()) { sender.sendMessage(msg("worth-none")); return true; }
+        if (found.size() > 8 && player != null) {
+            Bukkit.getScheduler().runTask(this, () -> player.openInventory(buildSearch(player, query, 0)));
+            return true;
+        }
+        if (found.size() > 8) {
+            StringBuilder ex = new StringBuilder();
+            for (int i = 0; i < 5; i++) {
+                if (i > 0) ex.append(", ");
+                ex.append(found.get(i).name().toLowerCase(Locale.ROOT).replace('_', ' '));
+            }
+            sender.sendMessage(msg("worth-many", "{count}", String.valueOf(found.size()), "{list}", ex.toString()));
+            return true;
+        }
+
+        for (Material m : found) {
+            int cat = categoryIndex(m);
+            if (isSpecialPriced(m)) cat = categories.stream().map(Category::id).toList()
+                    .indexOf(m == Material.ENCHANTED_BOOK ? "books" : "potions");
+            if (cat < 0) cat = defaultCategory;
+            String name = m.name().toLowerCase(Locale.ROOT).replace('_', ' ');
+            double mult = player != null ? computeMultipliers(player)[cat] : 1.0;
+            if (isSpecialPriced(m)) {
+                sender.sendMessage(msg("worth-special", "{item}", name, "{category}", categories.get(cat).name()));
+            } else {
+                double price = prices.get(m) * priceScale * mult;
+                sender.sendMessage(msg("worth-lookup",
+                        "{item}", name, "{price}", fmt(price),
+                        "{category}", categories.get(cat).name(), "{multiplier}", fmt(mult)));
+            }
+        }
+        return true;
+    }
+
     @Override
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command cmd, @NotNull String label, @NotNull String[] args) {
+        if (cmd.getName().equalsIgnoreCase("worth") || (args.length == 2 && args[0].equalsIgnoreCase("worth"))) {
+            String typed = args[args.length - 1].toLowerCase(Locale.ROOT);
+            List<String> names = new ArrayList<>();
+            if ("hand".startsWith(typed)) names.add("hand");
+            for (Material m : prices.keySet()) {
+                String n = m.name().toLowerCase(Locale.ROOT);
+                if (n.startsWith(typed)) names.add(n);
+                if (names.size() >= 60) break;
+            }
+            return names;
+        }
         if (args.length != 1) return List.of();
         List<String> out = new ArrayList<>(List.of("worth", "multiplier"));
         if (sender.hasPermission("sell.admin")) out.addAll(List.of("reload", "global", "status"));
@@ -1067,7 +1107,8 @@ public class SellPlugin extends JavaPlugin implements Listener, TabExecutor {
         InventoryHolder holder = event.getInventory().getHolder();
         UUID id = player.getUniqueId();
 
-        if (holder instanceof ProgressHolder || holder instanceof ItemsHolder) {
+        resyncInventory(id);
+        if (holder instanceof ProgressHolder || holder instanceof ItemsHolder || holder instanceof WorthHolder) {
             if (switching.remove(id)) return;   // we wisselen naar een ander menu
             giveBackStash(player);              // menu gesloten: items veilig teruggeven
             return;

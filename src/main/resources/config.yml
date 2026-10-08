@@ -15,30 +15,19 @@ max-multiplier: 3.0
 category-levels:
   "0": 1.0
   "2500": 1.1
-  "3595": 1.2
-  "5172": 1.3
-  "7440": 1.4
-  "10705": 1.5
-  "15391": 1.6
-  "22147": 1.7
-  "31849": 1.8
-  "45842": 1.9
-  "65956": 2.0
-  "94957": 2.1
-  "136591": 2.2
-  "196480": 2.3
-  "282493": 2.4
-  "406186": 2.5
-  "584064": 2.6
-  "839839": 2.7
-  "1207030": 2.8
-  "1734954": 2.9
+  "10000": 1.25
+  "40000": 1.5
+  "100000": 1.75
+  "250000": 2.0
+  "500000": 2.25
+  "1000000": 2.5
+  "2000000": 2.75
   "4000000": 3.0
 
 # De 9 categorieen (onderste rij van /sell). Waar elk item bij hoort staat in categories.yml.
 # scale: 0.5 = drempels de helft lager (handig voor goedkope categorieen), 2 = dubbel zo hoog.
-# Kleur van alle categorie-namen (MiniMessage tag, bv. <yellow>, <gold>, <aqua>, <green>)
-category-color: "<gray>"
+# Kleur van alle categorie-namen (MiniMessage tag, bv. <gray>, <yellow>, <gold>, <aqua>)
+category-name-color: "<gray>"
 default-category: blocks
 categories:
   crops:
@@ -170,6 +159,9 @@ worth-lore:
   format: "<!italic><gray>Worth <green>${price}"
 
 gui:
+  worth-title: "<dark_gray>Item prices"
+  search-title: "<dark_gray>Zoeken: <white>{query} <gray>({page}/{pages})"
+  close: "<!italic><yellow>Sluiten"
   sell-title: "<dark_gray>Sell"
   progress-title: "<dark_gray>Multiplier: {category}"
   multiplier-line: "<!italic><gray>Multiplier: <green>x{multiplier}"
@@ -203,3 +195,7 @@ messages:
   hold-item: "<red>Hou een item vast."
   global-set: "<green>Global multiplier staat nu op x{multiplier}."
   usage-global: "<red>Gebruik: /sell global <getal>"
+  worth-lookup: "<yellow>{item}</yellow> <gray>- Worth <green>${price}</green> <dark_gray>({category}<dark_gray>, x{multiplier})"
+  worth-special: "<yellow>{item}</yellow> <gray>- de prijs hangt af van het type. Kijk in <white>/worth</white> bij {category}"
+  worth-none: "<red>Geen item gevonden met die naam."
+  worth-many: "<gray>{count} items gevonden, wees specifieker. Bijvoorbeeld: <white>{list}"

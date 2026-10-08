@@ -102,10 +102,6 @@ public class WorthLore extends PacketListenerAbstract {
         if (unit < 0) return null;
 
         List<Component> lore = new ArrayList<>();
-        if (item.hasItemMeta() && item.getItemMeta().hasLore()) {
-            List<Component> existing = item.getItemMeta().lore();
-            if (existing != null) lore.addAll(existing);
-        }
         lore.add(plugin.loreLine(unit * item.getAmount()));
         item.lore(lore);
         plugin.onLoreApplied();
